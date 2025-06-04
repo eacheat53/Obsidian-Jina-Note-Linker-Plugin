@@ -1,0 +1,117 @@
+/* Placeholder for Jina AI Note Linker plugin styles */ 
+
+/* Jina AI Linker 插件样式 */
+
+/* 建议链接部分样式 */
+.jina-linker-suggestions {
+  background-color: var(--background-secondary);
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-top: 24px;
+  border-left: 4px solid var(--interactive-accent);
+}
+
+.jina-linker-suggestions h2 {
+  margin-top: 0;
+  color: var(--interactive-accent);
+  font-size: 1.3em;
+  font-weight: 600;
+}
+
+.jina-linker-suggestions ul {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.jina-linker-suggestions li {
+  margin-bottom: 6px;
+  line-height: 1.5;
+}
+
+.jina-linker-suggestions a {
+  color: var(--text-accent);
+  text-decoration: none;
+  transition: color 0.2s ease;
+}
+
+.jina-linker-suggestions a:hover {
+  color: var(--text-accent-hover);
+  text-decoration: underline;
+}
+
+/* 设置页面样式 */
+.jina-settings-header {
+  margin-bottom: 1em;
+  border-bottom: 1px solid var(--background-modifier-border);
+  padding-bottom: 0.5em;
+}
+
+.jina-settings-section {
+  margin-top: 2em;
+}
+
+.jina-settings-section-title {
+  font-size: 1.2em;
+  font-weight: 600;
+  color: var(--text-normal);
+  margin-bottom: 0.8em;
+}
+
+/* 美化设置区块 */
+.jina-settings-block {
+  background-color: var(--background-primary-alt);
+  border-radius: 6px;
+  padding: 12px;
+  margin-bottom: 12px;
+}
+
+/* 按钮样式 */
+.jina-button {
+  background-color: var(--interactive-accent) !important;
+  color: var(--text-on-accent) !important;
+  font-weight: 500;
+}
+
+.jina-button:hover {
+  background-color: var(--interactive-accent-hover) !important;
+}
+
+/* 给参数标签添加标签样式 */
+.jina-param-tag {
+  background-color: var(--background-modifier-border);
+  color: var(--text-muted);
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 0.85em;
+  margin-right: 6px;
+}
+
+/* 修改禁用的字段样式 */
+.jina-disabled-field {
+  color: var(--text-muted);
+  background-color: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+}
+
+/* 进度指示器 */
+.jina-progress {
+  height: 4px;
+  width: 100%;
+  background-color: var(--background-secondary);
+  position: relative;
+  margin: 8px 0;
+}
+
+.jina-progress-bar {
+  background-color: var(--interactive-accent);
+  height: 100%;
+  transition: width 0.3s ease;
+}
+
+/* 为哈希边界标记添加视觉识别 */
+.cm-hashtag-begin.cm-hashtag-end span:contains("HASH_BOUNDARY") {
+  color: var(--text-muted);
+  background-color: rgba(var(--interactive-accent-rgb), 0.1);
+  border-radius: 4px;
+  padding: 2px 4px;
+} 
