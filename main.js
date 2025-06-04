@@ -465,9 +465,9 @@ ${fileContent}`;
       const outputDirInVault = DEFAULT_OUTPUT_DIR_IN_VAULT;
       const fullOutputDirPath = path.join(vaultBasePath, outputDirInVault);
       try {
-        const { exists } = this.app.vault.adapter;
-        if (!await exists(outputDirInVault)) {
-          await this.app.vault.adapter.mkdir(outputDirInVault);
+        const fs = require("fs");
+        if (!fs.existsSync(fullOutputDirPath)) {
+          fs.mkdirSync(fullOutputDirPath, { recursive: true });
           console.log(`JinaLinker: \u5DF2\u521B\u5EFAJSON\u8F93\u51FA\u76EE\u5F55: ${outputDirInVault}`);
         }
       } catch (error) {
@@ -592,25 +592,43 @@ ${fileContent}`;
         try {
           let fileContent = await this.app.vault.read(file);
           const originalFileContentForComparison = fileContent;
-          let bodyContentForLinkInsertion = fileContent;
           const fmRegex = /^---\s*$\n([\s\S]*?)\n^---\s*$\n?/m;
           const fmMatch = fileContent.match(fmRegex);
-          let contentBeforeBoundaryWithFM = fileContent;
+          let bodyContent = fileContent;
+          let frontmatterPart = "";
           if (fmMatch) {
-            bodyContentForLinkInsertion = fileContent.substring(fmMatch[0].length);
+            frontmatterPart = fmMatch[0];
+            bodyContent = fileContent.substring(frontmatterPart.length);
           }
           const boundaryMarker = HASH_BOUNDARY_MARKER;
-          const boundaryIndexInBody = bodyContentForLinkInsertion.indexOf(boundaryMarker);
+          let boundaryIndexInBody = bodyContent.indexOf(boundaryMarker);
           if (boundaryIndexInBody === -1) {
-            console.warn(`JinaLinker: \u5728 ${file.path} \u7684\u6B63\u6587\u90E8\u5206 (frontmatter\u4E4B\u540E) \u672A\u627E\u5230\u54C8\u5E0C\u8FB9\u754C\u6807\u8BB0 "${boundaryMarker}"\u3002\u8DF3\u8FC7\u6B64\u6587\u4EF6\u7684\u94FE\u63A5\u63D2\u5165\u3002`);
-            continue;
+            const lines = bodyContent.split(/\r?\n/);
+            let lastNonEmptyLineIndex = -1;
+            for (let i = lines.length - 1; i >= 0; i--) {
+              if (lines[i].trim().length > 0) {
+                lastNonEmptyLineIndex = i;
+                break;
+              }
+            }
+            if (lastNonEmptyLineIndex !== -1) {
+              lines.splice(lastNonEmptyLineIndex + 1, 0, boundaryMarker);
+              bodyContent = lines.join("\n");
+              boundaryIndexInBody = bodyContent.indexOf(boundaryMarker);
+              console.log(`JinaLinker: \u5728 ${file.path} \u6DFB\u52A0\u4E86\u54C8\u5E0C\u8FB9\u754C\u6807\u8BB0\u3002`);
+            } else {
+              console.warn(`JinaLinker: ${file.path} \u6CA1\u6709\u4EFB\u4F55\u975E\u7A7A\u884C\uFF0C\u8DF3\u8FC7\u3002`);
+              continue;
+            }
           }
-          if (fmMatch) {
-            contentBeforeBoundaryWithFM = fmMatch[0] + bodyContentForLinkInsertion.substring(0, boundaryIndexInBody + boundaryMarker.length);
-          } else {
-            contentBeforeBoundaryWithFM = bodyContentForLinkInsertion.substring(0, boundaryIndexInBody + boundaryMarker.length);
-          }
-          let contentAfterBoundary = bodyContentForLinkInsertion.substring(boundaryIndexInBody + boundaryMarker.length);
+          const contentBeforeBoundary = bodyContent.substring(0, boundaryIndexInBody);
+          let contentAfterBoundary = bodyContent.substring(boundaryIndexInBody + boundaryMarker.length);
+          const sectionTitle = SUGGESTED_LINKS_TITLE;
+          const startMarker = LINKS_START_MARKER;
+          const endMarker = LINKS_END_MARKER;
+          const linkSectionRegexWithDiv = new RegExp(`<div[^>]*>\\s*${escapeRegExp(sectionTitle)}\\s*${escapeRegExp(startMarker)}[\\s\\S]*?${escapeRegExp(endMarker)}\\s*<\\/div>`, "g");
+          const linkSectionRegexSimple = new RegExp(`${escapeRegExp(sectionTitle)}\\s*${escapeRegExp(startMarker)}[\\s\\S]*?${escapeRegExp(endMarker)}`, "g");
+          contentAfterBoundary = contentAfterBoundary.replace(linkSectionRegexWithDiv, "").replace(linkSectionRegexSimple, "");
           const fileCache = this.app.metadataCache.getFileCache(file);
           const frontmatter = fileCache == null ? void 0 : fileCache.frontmatter;
           const candidates = frontmatter && frontmatter[AI_JUDGED_CANDIDATES_FM_KEY] && Array.isArray(frontmatter[AI_JUDGED_CANDIDATES_FM_KEY]) ? frontmatter[AI_JUDGED_CANDIDATES_FM_KEY] : [];
@@ -638,50 +656,31 @@ ${fileContent}`;
               }
             }
           }
-          const sectionTitle = SUGGESTED_LINKS_TITLE;
-          const startMarker = LINKS_START_MARKER;
-          const endMarker = LINKS_END_MARKER;
-          const sectionRegex = new RegExp(`^${escapeRegExp(sectionTitle)}(\r?
-)${escapeRegExp(startMarker)}[\\s\\S]*?${escapeRegExp(endMarker)}$`, "m");
-          let tempContentAfterBoundary = contentAfterBoundary;
-          const existingSectionMatch = sectionRegex.exec(tempContentAfterBoundary);
+          contentAfterBoundary = contentAfterBoundary.trim();
+          let finalContent = "";
+          if (frontmatterPart) {
+            finalContent += frontmatterPart;
+          }
+          finalContent += contentBeforeBoundary + boundaryMarker;
           if (linksToInsert.length > 0) {
             const linksMarkdown = linksToInsert.join("\n");
-            const newSectionContent = `<div class="jina-linker-suggestions">
+            finalContent += `
 ${sectionTitle}
 ${startMarker}
 ${linksMarkdown}
-${endMarker}
-</div>`;
-            if (existingSectionMatch) {
-              tempContentAfterBoundary = tempContentAfterBoundary.substring(0, existingSectionMatch.index) + newSectionContent + tempContentAfterBoundary.substring(existingSectionMatch.index + existingSectionMatch[0].length);
-            } else {
-              const titleRegex = new RegExp(`^${escapeRegExp(sectionTitle)}$`, "m");
-              tempContentAfterBoundary = tempContentAfterBoundary.replace(titleRegex, "").trim();
-              if (tempContentAfterBoundary.length > 0) {
-                if (!tempContentAfterBoundary.endsWith("\n\n") && !tempContentAfterBoundary.endsWith("\n")) {
-                  tempContentAfterBoundary += "\n\n";
-                } else if (tempContentAfterBoundary.endsWith("\n") && !tempContentAfterBoundary.endsWith("\n\n")) {
-                  tempContentAfterBoundary += "\n";
-                }
-                tempContentAfterBoundary += newSectionContent;
-              } else {
-                tempContentAfterBoundary = newSectionContent;
-              }
+${endMarker}`;
+            if (contentAfterBoundary.length > 0) {
+              finalContent += `
+
+${contentAfterBoundary}`;
             }
-          } else {
-            if (existingSectionMatch) {
-              tempContentAfterBoundary = tempContentAfterBoundary.substring(0, existingSectionMatch.index) + tempContentAfterBoundary.substring(existingSectionMatch.index + existingSectionMatch[0].length);
-              tempContentAfterBoundary = tempContentAfterBoundary.trim();
-            }
+          } else if (contentAfterBoundary.length > 0) {
+            finalContent += `
+
+${contentAfterBoundary}`;
           }
-          let newContentAfterBoundary = tempContentAfterBoundary;
-          if (newContentAfterBoundary.length > 0 && contentBeforeBoundaryWithFM.endsWith(HASH_BOUNDARY_MARKER) && !newContentAfterBoundary.startsWith("\n")) {
-            newContentAfterBoundary = "\n" + newContentAfterBoundary;
-          }
-          const finalNewContent = contentBeforeBoundaryWithFM + newContentAfterBoundary;
-          if (finalNewContent !== originalFileContentForComparison) {
-            await this.app.vault.modify(file, finalNewContent);
+          if (finalContent !== originalFileContentForComparison) {
+            await this.app.vault.modify(file, finalContent);
             updatedFileCount++;
             console.log(`JinaLinker: \u5DF2\u66F4\u65B0 ${file.path} \u4E2D\u7684\u94FE\u63A5\u3002`);
           }

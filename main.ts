@@ -586,9 +586,10 @@ export default class JinaLinkerPlugin extends Plugin {
             const fullOutputDirPath = path.join(vaultBasePath, outputDirInVault);
             
             try {
-                const { exists } = this.app.vault.adapter;
-                if (!(await exists(outputDirInVault))) {
-                    await this.app.vault.adapter.mkdir(outputDirInVault);
+                // 改用 fs 模块直接创建目录
+                const fs = require('fs');
+                if (!fs.existsSync(fullOutputDirPath)) {
+                    fs.mkdirSync(fullOutputDirPath, { recursive: true });
                     console.log(`JinaLinker: 已创建JSON输出目录: ${outputDirInVault}`);
                 }
             } catch (error) {
@@ -719,40 +720,75 @@ export default class JinaLinkerPlugin extends Plugin {
                 processedFileCount++;
                 
                 try {
+                    // 读取文件内容
                     let fileContent = await this.app.vault.read(file);
                     const originalFileContentForComparison = fileContent; 
 
-                    let bodyContentForLinkInsertion = fileContent;
+                    // 分离frontmatter和正文
                     const fmRegex = /^---\s*$\n([\s\S]*?)\n^---\s*$\n?/m;
                     const fmMatch = fileContent.match(fmRegex);
-                    let contentBeforeBoundaryWithFM = fileContent; 
+                    let bodyContent = fileContent;
+                    let frontmatterPart = '';
 
                     if (fmMatch) {
-                        bodyContentForLinkInsertion = fileContent.substring(fmMatch[0].length);
+                        frontmatterPart = fmMatch[0];
+                        bodyContent = fileContent.substring(frontmatterPart.length);
                     }
                     
+                    // 检查哈希边界标记，若没有则添加
                     const boundaryMarker = HASH_BOUNDARY_MARKER;
-                    const boundaryIndexInBody = bodyContentForLinkInsertion.indexOf(boundaryMarker);
-
-                    if (boundaryIndexInBody === -1) { 
-                        console.warn(`JinaLinker: 在 ${file.path} 的正文部分 (frontmatter之后) 未找到哈希边界标记 "${boundaryMarker}"。跳过此文件的链接插入。`);
-                        continue;
+                    let boundaryIndexInBody = bodyContent.indexOf(boundaryMarker);
+                    
+                    // 如果没有哈希边界标记，则在正文末尾添加
+                    if (boundaryIndexInBody === -1) {
+                        // 找到最后一个非空行
+                        const lines = bodyContent.split(/\r?\n/);
+                        let lastNonEmptyLineIndex = -1;
+                        
+                        for (let i = lines.length - 1; i >= 0; i--) {
+                            if (lines[i].trim().length > 0) {
+                                lastNonEmptyLineIndex = i;
+                                break;
+                            }
+                        }
+                        
+                        if (lastNonEmptyLineIndex !== -1) {
+                            // 在最后一个非空行后插入哈希边界标记
+                            lines.splice(lastNonEmptyLineIndex + 1, 0, boundaryMarker);
+                            bodyContent = lines.join('\n');
+                            boundaryIndexInBody = bodyContent.indexOf(boundaryMarker);
+                            console.log(`JinaLinker: 在 ${file.path} 添加了哈希边界标记。`);
+                        } else {
+                            console.warn(`JinaLinker: ${file.path} 没有任何非空行，跳过。`);
+                            continue;
+                        }
                     }
                     
-                    if (fmMatch) {
-                        contentBeforeBoundaryWithFM = fmMatch[0] + bodyContentForLinkInsertion.substring(0, boundaryIndexInBody + boundaryMarker.length);
-                    } else {
-                        contentBeforeBoundaryWithFM = bodyContentForLinkInsertion.substring(0, boundaryIndexInBody + boundaryMarker.length);
-                    }
+                    // 分离哈希边界标记前后的内容
+                    const contentBeforeBoundary = bodyContent.substring(0, boundaryIndexInBody);
+                    let contentAfterBoundary = bodyContent.substring(boundaryIndexInBody + boundaryMarker.length);
                     
-                    let contentAfterBoundary = bodyContentForLinkInsertion.substring(boundaryIndexInBody + boundaryMarker.length);
-
+                    // 删除现有的所有建议链接部分（可能有多个）
+                    const sectionTitle = SUGGESTED_LINKS_TITLE;
+                    const startMarker = LINKS_START_MARKER;
+                    const endMarker = LINKS_END_MARKER;
+                    
+                    // 正则表达式匹配整个建议链接部分，包括可能包含的div标签
+                    const linkSectionRegexWithDiv = new RegExp(`<div[^>]*>\\s*${escapeRegExp(sectionTitle)}\\s*${escapeRegExp(startMarker)}[\\s\\S]*?${escapeRegExp(endMarker)}\\s*<\\/div>`, "g");
+                    const linkSectionRegexSimple = new RegExp(`${escapeRegExp(sectionTitle)}\\s*${escapeRegExp(startMarker)}[\\s\\S]*?${escapeRegExp(endMarker)}`, "g");
+                    
+                    // 清除所有匹配的链接部分
+                    contentAfterBoundary = contentAfterBoundary
+                        .replace(linkSectionRegexWithDiv, '')
+                        .replace(linkSectionRegexSimple, '');
+                    
+                    // 获取候选链接
                     const fileCache = this.app.metadataCache.getFileCache(file);
                     const frontmatter = fileCache?.frontmatter;
-                    // Use internal constant AI_JUDGED_CANDIDATES_FM_KEY
                     const candidates: any[] = (frontmatter && frontmatter[AI_JUDGED_CANDIDATES_FM_KEY] && Array.isArray(frontmatter[AI_JUDGED_CANDIDATES_FM_KEY])) ? frontmatter[AI_JUDGED_CANDIDATES_FM_KEY] : [];
                     const linksToInsert: string[] = [];
 
+                    // 按分数排序
                     candidates.sort((a, b) => {
                         const scoreA = a.aiScore !== undefined ? a.aiScore : -Infinity;
                         const scoreB = b.aiScore !== undefined ? b.aiScore : -Infinity;
@@ -760,6 +796,7 @@ export default class JinaLinkerPlugin extends Plugin {
                         return (b.jinaScore || 0) - (a.jinaScore || 0);
                     });
 
+                    // 筛选要插入的链接
                     for (const cand of candidates) {
                         if (linksToInsert.length >= this.settings.maxLinksToInsertPerNote) break;
                         
@@ -773,63 +810,42 @@ export default class JinaLinkerPlugin extends Plugin {
                                 const linkText = this.app.metadataCache.fileToLinktext(targetTFile, file.path, true);
                                 linksToInsert.push(`- [[${linkText}]]`);
                             } else {
-                                 console.warn(`JinaLinker: 目标文件 ${cand.targetPath} 在为 ${file.path} 生成链接时未找到。跳过此链接。`);
+                                console.warn(`JinaLinker: 目标文件 ${cand.targetPath} 在为 ${file.path} 生成链接时未找到。跳过此链接。`);
                             }
                         }
                     }
 
-                    const sectionTitle = SUGGESTED_LINKS_TITLE;
-                    const startMarker = LINKS_START_MARKER;
-                    const endMarker = LINKS_END_MARKER;
-                    const sectionRegex = new RegExp(`^${escapeRegExp(sectionTitle)}(\r?\n)${escapeRegExp(startMarker)}[\\s\\S]*?${escapeRegExp(endMarker)}$`, "m");
+                    // 清理可能存在的多余空行
+                    contentAfterBoundary = contentAfterBoundary.trim();
                     
-                    let tempContentAfterBoundary = contentAfterBoundary;
-                    const existingSectionMatch = sectionRegex.exec(tempContentAfterBoundary);
-
+                    // 构建最终内容
+                    let finalContent = '';
+                    
+                    // 添加frontmatter
+                    if (frontmatterPart) {
+                        finalContent += frontmatterPart;
+                    }
+                    
+                    // 添加正文和哈希边界标记
+                    finalContent += contentBeforeBoundary + boundaryMarker;
+                    
+                    // 添加换行和建议链接部分（如果有链接）
                     if (linksToInsert.length > 0) {
-                        const linksMarkdown = linksToInsert.join("\n");
-                        // 添加CSS类用于样式美化
-                        const newSectionContent = `<div class="jina-linker-suggestions">\n${sectionTitle}\n${startMarker}\n${linksMarkdown}\n${endMarker}\n</div>`;
-
-                        if (existingSectionMatch) {
-                            tempContentAfterBoundary = tempContentAfterBoundary.substring(0, existingSectionMatch.index) +
-                                                     newSectionContent +
-                                                     tempContentAfterBoundary.substring(existingSectionMatch.index + existingSectionMatch[0].length);
-                        } else {
-                            const titleRegex = new RegExp(`^${escapeRegExp(sectionTitle)}$`, "m");
-                            tempContentAfterBoundary = tempContentAfterBoundary.replace(titleRegex, "").trim(); 
-
-                            if (tempContentAfterBoundary.length > 0) {
-                                if (!tempContentAfterBoundary.endsWith('\n\n') && !tempContentAfterBoundary.endsWith('\n')) { 
-                                   tempContentAfterBoundary += '\n\n';
-                                } else if (tempContentAfterBoundary.endsWith('\n') && !tempContentAfterBoundary.endsWith('\n\n')) { 
-                                    tempContentAfterBoundary += '\n';
-                                }
-                                tempContentAfterBoundary += newSectionContent;
-                            } else { 
-                                tempContentAfterBoundary = newSectionContent;
-                            }
+                        const linksMarkdown = linksToInsert.join('\n');
+                        finalContent += `\n${sectionTitle}\n${startMarker}\n${linksMarkdown}\n${endMarker}`;
+                        
+                        // 如果有剩余内容，添加到最后
+                        if (contentAfterBoundary.length > 0) {
+                            finalContent += `\n\n${contentAfterBoundary}`;
                         }
-                    } else { 
-                        if (existingSectionMatch) {
-                            tempContentAfterBoundary = tempContentAfterBoundary.substring(0, existingSectionMatch.index) +
-                                                     tempContentAfterBoundary.substring(existingSectionMatch.index + existingSectionMatch[0].length);
-                            tempContentAfterBoundary = tempContentAfterBoundary.trim(); 
-                        }
+                    } else if (contentAfterBoundary.length > 0) {
+                        // 如果没有链接但有其他内容，保留其他内容
+                        finalContent += `\n\n${contentAfterBoundary}`;
                     }
-                    
-                    let newContentAfterBoundary = tempContentAfterBoundary;
-                    
-                    if (newContentAfterBoundary.length > 0 && 
-                        contentBeforeBoundaryWithFM.endsWith(HASH_BOUNDARY_MARKER) && 
-                        !newContentAfterBoundary.startsWith('\n')) {
-                        newContentAfterBoundary = '\n' + newContentAfterBoundary;
-                    }
-                    
-                    const finalNewContent = contentBeforeBoundaryWithFM + newContentAfterBoundary;
 
-                    if (finalNewContent !== originalFileContentForComparison) {
-                        await this.app.vault.modify(file, finalNewContent);
+                    // 检查内容是否有变化，有则更新文件
+                    if (finalContent !== originalFileContentForComparison) {
+                        await this.app.vault.modify(file, finalContent);
                         updatedFileCount++;
                         console.log(`JinaLinker: 已更新 ${file.path} 中的链接。`);
                     }
@@ -839,6 +855,7 @@ export default class JinaLinkerPlugin extends Plugin {
                     new Notice(`更新 ${file.path} 中的链接时出错: ${error.message}`);
                 }
             }
+            
             const summaryMessage = `链接插入处理完毕。共检查 ${processedFileCount} 个文件，更新了 ${updatedFileCount} 个文件。`;
             console.log(`JinaLinker: ${summaryMessage}`);
             new Notice(summaryMessage);

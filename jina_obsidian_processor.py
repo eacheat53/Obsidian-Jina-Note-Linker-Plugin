@@ -676,6 +676,7 @@ def main():
     parser.add_argument('--max_content_length_for_ai', type=int, default=5000, help='传递给 AI 评分的每篇笔记的最大内容长度（字符）')
     parser.add_argument('--max_candidates_per_source_for_ai_scoring', type=int, default=20, help='每个源笔记发送给 AI 评分的最大候选链接数')
     parser.add_argument('--ai_scoring_mode', type=str, choices=['force', 'smart', 'skip'], default='smart', help='AI 评分模式：force=强制重新评分所有候选，smart=只评分未评分的，skip=跳过 AI 评分')
+    parser.add_argument('--hash_boundary_marker', type=str, default='<!-- HASH_BOUNDARY -->', help='用于标记哈希计算边界的标记')
     
     args = parser.parse_args()
     
@@ -799,6 +800,7 @@ def main():
             deepseek_model_name_to_use=args.deepseek_model_name,
             max_content_length_for_ai_to_use=args.max_content_length_for_ai,
             max_candidates_per_source_for_ai_scoring_to_use=args.max_candidates_per_source_for_ai_scoring, 
+            hash_boundary_marker_to_use=args.hash_boundary_marker,
             force_rescore=force_rescore
         )
     else:
