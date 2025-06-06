@@ -129,12 +129,6 @@ date: 2023-01-01
 - 所有数据处理结果均存储在本地，不会上传到其他服务器
 - 请查阅[Jina AI隐私政策](https://jina.ai/privacy)和[DeepSeek隐私政策](https://deepseek.ai/privacy)了解更多信息
 
-## 赞助与支持
-
-如果您觉得Jina AI Linker插件有帮助，欢迎通过以下方式支持开发：
-
-- ![Buy Me a Coffee](images/4.jpg)
-
 ## 反馈与贡献
 
 有问题、建议或想要贡献代码？欢迎：
