@@ -1,4 +1,4 @@
-import { App, Notice, Plugin, PluginSettingTab, Setting, TFolder, Modal, Editor, MarkdownView, TFile, normalizePath, Menu } from 'obsidian';
+import { App, Notice, Plugin, PluginSettingTab, Setting, TFolder, Modal, Editor, MarkdownView, TFile, normalizePath, Menu, SuggestModal, FuzzySuggestModal, FuzzyMatch } from 'obsidian';
 import { spawn } from 'child_process';
 import * as path from 'path'; // Node.js path module
 import * as crypto from 'crypto'; // Node.js crypto module for hashing
@@ -120,11 +120,36 @@ class CalculateHashModal extends Modal {
     plugin: JinaLinkerPlugin;
     onSubmit: (filePath: string) => void;
     filePath: string = '';
+    inputEl: HTMLInputElement;
+    
+    // 用于存储自动完成的文件和文件夹路径
+    allPaths: string[] = [];
 
     constructor(app: App, plugin: JinaLinkerPlugin, onSubmit: (filePath: string) => void) {
         super(app);
         this.plugin = plugin;
         this.onSubmit = onSubmit;
+        
+        // 加载所有文件路径
+        this.loadAllPaths();
+    }
+    
+    // 加载所有Markdown文件路径
+    loadAllPaths() {
+        this.allPaths = [];
+        
+        // 获取所有加载的文件
+        const allFiles = this.app.vault.getAllLoadedFiles();
+        
+        // 只添加Markdown文件路径
+        for (const file of allFiles) {
+            if (file instanceof TFile && file.extension === 'md') {
+                this.allPaths.push(file.path);
+            }
+        }
+        
+        // 排序路径，按字母顺序
+        this.allPaths.sort();
     }
 
     onOpen() {
@@ -132,28 +157,112 @@ class CalculateHashModal extends Modal {
         contentEl.empty();
         contentEl.createEl('h2', { text: '计算笔记内容哈希值' });
 
-        new Setting(contentEl)
-            .setName('笔记文件路径')
-            .setDesc('请输入要计算哈希值的笔记的仓库相对路径 (例如：文件夹/笔记.md)。')
-            .addText(text => text
-                .setPlaceholder('例如：Notes/MyNote.md')
-                .setValue(this.filePath)
-                .onChange(value => {
-                    this.filePath = value.trim();
-                }));
+        const settingDiv = contentEl.createDiv();
+        settingDiv.addClass('jina-setting');
         
-        new Setting(contentEl)
-            .addButton(button => button
-                .setButtonText('计算哈希')
-                .setCta()
-                .onClick(() => {
-                    if (!this.filePath) {
-                        new Notice('请输入文件路径。');
-                        return;
-                    }
-                    this.close();
-                    this.onSubmit(this.filePath);
-                }));
+        const descEl = settingDiv.createDiv();
+        descEl.addClass('setting-item-description');
+        descEl.setText('请输入要计算哈希值的笔记的仓库相对路径 (例如：文件夹/笔记.md)。');
+        
+        // 创建路径输入控件容器
+        const inputContainer = settingDiv.createDiv();
+        inputContainer.addClass('jina-path-input-container');
+        
+        // 创建输入框
+        this.inputEl = document.createElement('input');
+        this.inputEl.addClass('jina-path-input');
+        this.inputEl.setAttr('placeholder', '例如：Notes/MyNote.md');
+        this.inputEl.value = this.filePath;
+        inputContainer.appendChild(this.inputEl);
+        
+        // 创建路径选择按钮
+        const browseButton = document.createElement('button');
+        browseButton.setText('浏览...');
+        browseButton.addClass('jina-browse-button');
+        inputContainer.appendChild(browseButton);
+        
+        // 添加输入框变更事件
+        this.inputEl.addEventListener('input', (e) => {
+            this.filePath = this.inputEl.value;
+        });
+        
+        // 添加路径选择按钮点击事件
+        browseButton.addEventListener('click', () => {
+            // 获取当前输入的部分路径
+            const currentPath = this.inputEl.value.trim();
+            
+            // 打开文件选择对话框
+            this.openPathSuggestModal(currentPath, (selectedPath) => {
+                if (selectedPath) {
+                    // 更新输入框值
+                    this.inputEl.value = selectedPath;
+                    this.filePath = selectedPath;
+                    this.inputEl.focus();
+                }
+            });
+        });
+        
+        // 按钮区域
+        const buttonContainer = contentEl.createDiv();
+        buttonContainer.addClass('jina-button-container');
+        
+        const submitButton = buttonContainer.createEl('button');
+        submitButton.setText('计算哈希');
+        submitButton.addClass('mod-cta');
+        submitButton.addEventListener('click', () => {
+            if (!this.filePath) {
+                new Notice('请输入文件路径。');
+                return;
+            }
+            this.close();
+            this.onSubmit(this.filePath);
+        });
+        
+        // 添加样式
+        this.addStyles(contentEl);
+    }
+    
+    // 打开路径建议弹窗
+    openPathSuggestModal(currentPath: string, callback: (selectedPath: string) => void) {
+        const modal = new PathSuggestModal(this.app, this.allPaths, currentPath, callback);
+        modal.open();
+    }
+    
+    // 添加样式
+    addStyles(contentEl: HTMLElement) {
+        const styleEl = contentEl.createEl('style');
+        styleEl.textContent = `
+            .jina-setting {
+                padding: 12px 0;
+            }
+            .jina-path-input-container {
+                display: flex;
+                margin-top: 8px;
+                gap: 8px;
+                align-items: center;
+            }
+            .jina-path-input {
+                flex-grow: 1;
+                padding: 8px;
+                border-radius: 4px;
+                font-size: 14px;
+                background-color: var(--background-modifier-form-field);
+                border: 1px solid var(--background-modifier-border);
+            }
+            .jina-browse-button {
+                padding: 6px 12px;
+                background-color: var(--interactive-accent);
+                color: var(--text-on-accent);
+                border: none;
+                border-radius: 4px;
+                cursor: pointer;
+            }
+            .jina-button-container {
+                display: flex;
+                justify-content: flex-end;
+                margin-top: 12px;
+            }
+        `;
     }
 
     onClose() {
@@ -166,11 +275,38 @@ class UpdateHashesModal extends Modal {
     plugin: JinaLinkerPlugin;
     onSubmit: (filePaths: string) => void; 
     filePaths: string = '';
+    inputEl: HTMLTextAreaElement;
+    
+    // 用于存储自动完成的文件和文件夹路径
+    allPaths: string[] = [];
 
     constructor(app: App, plugin: JinaLinkerPlugin, onSubmit: (filePaths: string) => void) {
         super(app);
         this.plugin = plugin;
         this.onSubmit = onSubmit;
+        
+        // 加载所有文件和文件夹路径
+        this.loadAllPaths();
+    }
+    
+    // 加载所有文件和文件夹路径
+    loadAllPaths() {
+        this.allPaths = [];
+        
+        // 获取所有文件
+        const allFiles = this.app.vault.getAllLoadedFiles();
+        
+        // 添加文件路径
+        for (const file of allFiles) {
+            if (file instanceof TFile && file.extension === 'md') {
+                this.allPaths.push(file.path);
+            } else if (file instanceof TFolder) {
+                this.allPaths.push(file.path + "/");
+            }
+        }
+        
+        // 排序路径，按字母顺序
+        this.allPaths.sort();
     }
 
     onOpen() {
@@ -178,28 +314,133 @@ class UpdateHashesModal extends Modal {
         contentEl.empty();
         contentEl.createEl('h2', { text: '更新嵌入数据中的笔记哈希值' });
 
-        new Setting(contentEl)
-            .setName('笔记文件路径列表')
-            .setDesc('请输入一个或多个仓库相对路径 (用英文逗号 "," 分隔)，用于更新其在嵌入文件中的哈希值。')
-            .addTextArea(text => text 
-                .setPlaceholder('例如：Notes/Note1.md, Folder/Note2.md')
-                .setValue(this.filePaths)
-                .onChange(value => {
-                    this.filePaths = value; 
-                }));
+        const settingDiv = contentEl.createDiv();
+        settingDiv.addClass('jina-setting');
         
-        new Setting(contentEl)
-            .addButton(button => button
-                .setButtonText('更新哈希值')
-                .setCta()
-                .onClick(() => {
-                    if (!this.filePaths.trim()) {
-                        new Notice('请输入至少一个文件路径。');
-                        return;
-                    }
-                    this.close();
-                    this.onSubmit(this.filePaths);
-                }));
+        const descEl = settingDiv.createDiv();
+        descEl.addClass('setting-item-description');
+        descEl.setText('请输入一个或多个仓库相对路径 (用英文逗号 "," 分隔)，用于更新其在嵌入文件中的哈希值。可以是具体文件或文件夹。');
+        
+        // 创建路径输入控件容器
+        const inputContainer = settingDiv.createDiv();
+        inputContainer.addClass('jina-path-input-container');
+        
+        // 创建输入框
+        this.inputEl = document.createElement('textarea');
+        this.inputEl.addClass('jina-path-textarea');
+        this.inputEl.setAttr('rows', '3');
+        this.inputEl.setAttr('placeholder', '例如：Notes/Note1.md, 文件夹/');
+        this.inputEl.value = this.filePaths;
+        inputContainer.appendChild(this.inputEl);
+        
+        // 创建路径选择按钮
+        const browseButton = document.createElement('button');
+        browseButton.setText('浏览...');
+        browseButton.addClass('jina-browse-button');
+        inputContainer.appendChild(browseButton);
+        
+        // 添加输入框变更事件
+        this.inputEl.addEventListener('input', (e) => {
+            this.filePaths = this.inputEl.value;
+        });
+        
+        // 添加路径选择按钮点击事件
+        browseButton.addEventListener('click', () => {
+            // 获取当前光标位置的路径上下文
+            const cursorPos = this.inputEl.selectionStart;
+            const text = this.inputEl.value;
+            
+            // 查找光标前的最后一个逗号位置
+            let startPos = text.lastIndexOf(',', cursorPos - 1);
+            if (startPos === -1) startPos = 0;
+            else startPos += 1; // 跳过逗号
+            
+            // 提取当前输入的部分路径
+            const currentPath = text.substring(startPos, cursorPos).trim();
+            
+            // 打开文件选择对话框
+            this.openPathSuggestModal(currentPath, (selectedPath) => {
+                if (selectedPath) {
+                    // 构建新的输入值，替换当前路径部分
+                    const newValue = text.substring(0, startPos) + 
+                                   (startPos > 0 ? ' ' : '') + 
+                                   selectedPath + 
+                                   text.substring(cursorPos);
+                    
+                    // 更新输入框值
+                    this.inputEl.value = newValue;
+                    this.filePaths = newValue;
+                    
+                    // 设置光标位置到路径后面
+                    const newCursorPos = startPos + selectedPath.length + (startPos > 0 ? 1 : 0);
+                    this.inputEl.setSelectionRange(newCursorPos, newCursorPos);
+                    this.inputEl.focus();
+                }
+            });
+        });
+        
+        // 按钮区域
+        const buttonContainer = contentEl.createDiv();
+        buttonContainer.addClass('jina-button-container');
+        
+        const submitButton = buttonContainer.createEl('button');
+        submitButton.setText('更新哈希值');
+        submitButton.addClass('mod-cta');
+        submitButton.addEventListener('click', () => {
+            if (!this.filePaths.trim()) {
+                new Notice('请输入至少一个文件路径。');
+                return;
+            }
+            this.close();
+            this.onSubmit(this.filePaths);
+        });
+        
+        // 添加样式
+        this.addStyles(contentEl);
+    }
+    
+    // 打开路径建议弹窗
+    openPathSuggestModal(currentPath: string, callback: (selectedPath: string) => void) {
+        const modal = new PathSuggestModal(this.app, this.allPaths, currentPath, callback);
+        modal.open();
+    }
+    
+    // 添加样式
+    addStyles(contentEl: HTMLElement) {
+        const styleEl = contentEl.createEl('style');
+        styleEl.textContent = `
+            .jina-setting {
+                padding: 12px 0;
+            }
+            .jina-path-input-container {
+                display: flex;
+                margin-top: 8px;
+                gap: 8px;
+                align-items: flex-start;
+            }
+            .jina-path-textarea {
+                flex-grow: 1;
+                min-height: 60px;
+                padding: 8px;
+                border-radius: 4px;
+                font-size: 14px;
+                background-color: var(--background-modifier-form-field);
+                border: 1px solid var(--background-modifier-border);
+            }
+            .jina-browse-button {
+                padding: 6px 12px;
+                background-color: var(--interactive-accent);
+                color: var(--text-on-accent);
+                border: none;
+                border-radius: 4px;
+                cursor: pointer;
+            }
+            .jina-button-container {
+                display: flex;
+                justify-content: flex-end;
+                margin-top: 12px;
+            }
+        `;
     }
 
     onClose() {
@@ -208,6 +449,57 @@ class UpdateHashesModal extends Modal {
     }
 }
 
+// 用于路径自动完成的modal
+class PathSuggestModal extends FuzzySuggestModal<string> {
+    paths: string[];
+    inputText: string;
+    callback: (selectedPath: string) => void;
+    
+    constructor(app: App, paths: string[], inputText: string, callback: (selectedPath: string) => void) {
+        super(app);
+        this.paths = paths;
+        this.inputText = inputText || '';
+        this.callback = callback;
+        this.setPlaceholder('选择文件或文件夹路径');
+        
+        // 设置初始查询文本
+        if (this.inputText) {
+            this.inputEl.value = this.inputText;
+            // 触发输入事件以显示初始结果
+            this.inputEl.dispatchEvent(new Event('input'));
+        }
+    }
+    
+    getItems(): string[] {
+        return this.paths;
+    }
+    
+    getItemText(path: string): string {
+        return path;
+    }
+    
+    onChooseItem(path: string, evt: MouseEvent | KeyboardEvent): void {
+        this.callback(path);
+    }
+    
+    renderSuggestion(item: FuzzyMatch<string>, el: HTMLElement): void {
+        const match = item.item;
+        el.setText(match);
+        
+        // 如果路径以/结尾，表示是文件夹，添加特殊样式
+        if (match.endsWith('/')) {
+            el.addClass('jina-folder-path');
+            const iconEl = el.createSpan({cls: 'jina-folder-icon'});
+            iconEl.setText('📁 ');
+            el.prepend(iconEl);
+        } else {
+            el.addClass('jina-file-path');
+            const iconEl = el.createSpan({cls: 'jina-file-icon'});
+            iconEl.setText('📄 ');
+            el.prepend(iconEl);
+        }
+    }
+}
 
 export default class JinaLinkerPlugin extends Plugin {
     settings: JinaLinkerSettings;
@@ -392,9 +684,8 @@ export default class JinaLinkerPlugin extends Plugin {
     }
 
     async updateHashesInEmbeddingsFile(targetRelativePaths: string[]): Promise<void> {
-        new Notice(`开始更新 ${targetRelativePaths.length} 个文件在嵌入数据中的哈希值...`);
-        console.log(`JinaLinker: 请求更新以下文件的哈希: ${targetRelativePaths.join(', ')}`);
-
+        new Notice(`开始处理 ${targetRelativePaths.length} 个路径，更新哈希值...`);
+        
         // 使用默认输出目录，而不是用户设置的outputDirInVault
         const outputDirInVault = DEFAULT_OUTPUT_DIR_IN_VAULT;
         const embeddingsFilePath = normalizePath(path.join(outputDirInVault, EMBEDDINGS_FILE_NAME));
@@ -418,46 +709,84 @@ export default class JinaLinkerPlugin extends Plugin {
             return;
         }
         
+        // 用于存储要处理的所有Markdown文件
+        let filesToProcess: TFile[] = [];
+        
+        // 处理每个输入路径，可能是文件或文件夹
+        for (const relPath of targetRelativePaths) {
+            const normalizedRelPathKey = normalizePath(relPath);
+            const abstractFile = this.app.vault.getAbstractFileByPath(normalizedRelPathKey);
+            
+            if (!abstractFile) {
+                new Notice(`警告: 路径 "${normalizedRelPathKey}" 不存在，跳过。`);
+                console.warn(`JinaLinker: 路径 "${normalizedRelPathKey}" 不存在，跳过。`);
+                continue;
+            }
+            
+            // 如果是文件夹，递归获取所有Markdown文件
+            if (abstractFile instanceof TFolder) {
+                console.log(`JinaLinker: 处理文件夹 "${normalizedRelPathKey}"...`);
+                
+                // 递归获取该文件夹下的所有Markdown文件
+                const folderFiles = this.getMarkdownFilesInFolder(abstractFile);
+                console.log(`JinaLinker: 在文件夹 "${normalizedRelPathKey}" 中找到 ${folderFiles.length} 个Markdown文件。`);
+                
+                // 添加到处理列表
+                filesToProcess = [...filesToProcess, ...folderFiles];
+            } 
+            // 如果是文件且是Markdown文件，直接添加到处理列表
+            else if (abstractFile instanceof TFile && abstractFile.extension === 'md') {
+                filesToProcess.push(abstractFile);
+            }
+            // 如果是其他类型的文件，跳过
+            else {
+                new Notice(`警告: 路径 "${normalizedRelPathKey}" 不是Markdown文件或文件夹，跳过。`);
+                console.warn(`JinaLinker: 路径 "${normalizedRelPathKey}" 不是Markdown文件或文件夹，跳过。`);
+            }
+        }
+        
+        // 去重，避免重复处理同一文件
+        filesToProcess = Array.from(new Set(filesToProcess));
+        
+        new Notice(`共找到 ${filesToProcess.length} 个Markdown文件需要处理...`);
+        console.log(`JinaLinker: 共找到 ${filesToProcess.length} 个Markdown文件需要处理。`);
+        
         let updatedJsonCount = 0;
         let notFoundInJsonCount = 0;
         let hashCalculationFailedCount = 0;
         let noChangeCount = 0;
         let updatedFrontmatterCount = 0;
+        let processedCount = 0;
 
-        for (const relPath of targetRelativePaths) {
-            const normalizedRelPathKey = normalizePath(relPath); 
-            const tFile = this.app.vault.getAbstractFileByPath(normalizedRelPathKey);
-
-            if (!(tFile instanceof TFile)) {
-                new Notice(`警告: 文件 "${normalizedRelPathKey}" 在仓库中未找到，跳过。`);
-                console.warn(`JinaLinker: 文件 "${normalizedRelPathKey}" 在仓库中未找到，跳过哈希更新。`);
-                notFoundInJsonCount++; 
-                continue;
-            }
+        // 处理每个文件
+        for (const tFile of filesToProcess) {
+            processedCount++;
+            const normalizedFilePath = tFile.path;
+            console.log(`JinaLinker: 处理文件 (${processedCount}/${filesToProcess.length}): ${normalizedFilePath}`);
 
             const newHash = await this.calculateNoteContentHashForFile(tFile);
             if (!newHash) {
-                console.warn(`JinaLinker: 未能为文件 "${normalizedRelPathKey}" 计算新哈希，跳过。`);
+                console.warn(`JinaLinker: 未能为文件 "${normalizedFilePath}" 计算新哈希，跳过。`);
                 hashCalculationFailedCount++;
                 continue;
             }
             
             // 更新嵌入JSON中的哈希值
             let jsonUpdated = false;
-            if (embeddingsData.files.hasOwnProperty(normalizedRelPathKey)) {
-                const entry = embeddingsData.files[normalizedRelPathKey];
+            if (embeddingsData.files.hasOwnProperty(normalizedFilePath)) {
+                const entry = embeddingsData.files[normalizedFilePath];
                 const oldHash = entry.hash;
                 if (oldHash === newHash) {
-                    console.log(`JinaLinker: 文件 "${normalizedRelPathKey}" 在JSON中的哈希值 (${newHash ? newHash.substring(0,8) : 'N/A'}...) 已是最新。`);
+                    console.log(`JinaLinker: 文件 "${normalizedFilePath}" 在JSON中的哈希值 (${newHash ? newHash.substring(0,8) : 'N/A'}...) 已是最新。`);
                 } else {
-                    console.log(`JinaLinker: 更新JSON中文件 "${normalizedRelPathKey}" 的哈希: ${oldHash ? oldHash.substring(0,8) : 'N/A'}... -> ${newHash ? newHash.substring(0,8) : 'N/A'}...`);
+                    console.log(`JinaLinker: 更新JSON中文件 "${normalizedFilePath}" 的哈希: ${oldHash ? oldHash.substring(0,8) : 'N/A'}... -> ${newHash ? newHash.substring(0,8) : 'N/A'}...`);
                     entry.hash = newHash;
                     entry.last_hash_updated_at = new Date().toISOString();
                     updatedJsonCount++;
                     jsonUpdated = true;
                 }
             } else {
-                console.warn(`JinaLinker: 在嵌入JSON中未找到文件 "${normalizedRelPathKey}" 的条目。`);
+                console.warn(`JinaLinker: 在嵌入JSON中未找到文件 "${normalizedFilePath}" 的条目。`);
                 notFoundInJsonCount++;
             }
             
@@ -495,9 +824,9 @@ export default class JinaLinkerPlugin extends Plugin {
                             frontmatterUpdated = true;
                             const oldHashDisplay = oldHash ? oldHash.substring(0,8) : 'N/A';
                             const newHashDisplay = newHash ? newHash.substring(0,8) : 'N/A';
-                            console.log("JinaLinker: 更新文件 \"" + normalizedRelPathKey + "\" frontmatter中的哈希: " + oldHashDisplay + "... -> " + newHashDisplay + "...");
+                            console.log(`JinaLinker: 更新文件 "${normalizedFilePath}" frontmatter中的哈希: ${oldHashDisplay}... -> ${newHashDisplay}...`);
                         } else {
-                            console.log(`JinaLinker: 文件 "${normalizedRelPathKey}" frontmatter中的哈希值已是最新。`);
+                            console.log(`JinaLinker: 文件 "${normalizedFilePath}" frontmatter中的哈希值已是最新。`);
                         }
                     } else {
                         // 无jina_hash，添加到frontmatter末尾
@@ -507,13 +836,13 @@ export default class JinaLinkerPlugin extends Plugin {
                             `---\n${newFrontmatter}\n---\n`
                         );
                         frontmatterUpdated = true;
-                        console.log(`JinaLinker: 在文件 "${normalizedRelPathKey}" frontmatter中添加哈希值。`);
+                        console.log(`JinaLinker: 在文件 "${normalizedFilePath}" frontmatter中添加哈希值。`);
                     }
                 } else {
                     // 无frontmatter，创建包含jina_hash的frontmatter
                     newContent = `---\njina_hash: ${newHash}\n---\n\n${fileContent}`;
                     frontmatterUpdated = true;
-                    console.log(`JinaLinker: 为文件 "${normalizedRelPathKey}" 创建包含哈希值的frontmatter。`);
+                    console.log(`JinaLinker: 为文件 "${normalizedFilePath}" 创建包含哈希值的frontmatter。`);
                 }
                 
                 // 如果需要更新，保存文件
@@ -525,8 +854,8 @@ export default class JinaLinkerPlugin extends Plugin {
                 }
                 
             } catch (error) {
-                console.error("JinaLinker: 更新文件 \"" + normalizedRelPathKey + "\" frontmatter时出错:", error);
-                new Notice("更新文件 \"" + normalizedRelPathKey + "\" frontmatter时出错: " + (error instanceof Error ? error.message : String(error)));
+                console.error(`JinaLinker: 更新文件 "${normalizedFilePath}" frontmatter时出错:`, error);
+                new Notice(`更新文件 "${normalizedFilePath}" frontmatter时出错: ${error instanceof Error ? error.message : String(error)}`);
             }
         }
 
@@ -534,10 +863,10 @@ export default class JinaLinkerPlugin extends Plugin {
         if (updatedJsonCount > 0) {
             try {
                 await this.app.vault.adapter.write(embeddingsFilePath, JSON.stringify(embeddingsData, null, 4));
-                console.log("JinaLinker: 嵌入文件 \"" + embeddingsFilePath + "\" 已更新。");
+                console.log(`JinaLinker: 嵌入文件 "${embeddingsFilePath}" 已更新。`);
             } catch (error) {
-                new Notice("写入更新后的嵌入文件 \"" + embeddingsFilePath + "\" 时发生错误: " + (error instanceof Error ? error.message : String(error)));
-                console.error("JinaLinker: 写入更新后的嵌入文件 \"" + embeddingsFilePath + "\" 时发生错误:", error);
+                new Notice(`写入更新后的嵌入文件 "${embeddingsFilePath}" 时发生错误: ${error instanceof Error ? error.message : String(error)}`);
+                console.error(`JinaLinker: 写入更新后的嵌入文件 "${embeddingsFilePath}" 时发生错误:`, error);
                 return;
             }
         }
@@ -563,7 +892,25 @@ export default class JinaLinkerPlugin extends Plugin {
             new Notice(detailedSummary, 7000); 
         }
     }
-
+    
+    // 递归获取文件夹中的所有Markdown文件
+    private getMarkdownFilesInFolder(folder: TFolder): TFile[] {
+        let markdownFiles: TFile[] = [];
+        
+        // 获取所有加载的文件
+        const allFiles = this.app.vault.getAllLoadedFiles();
+        
+        // 过滤出文件夹下的Markdown文件
+        for (const file of allFiles) {
+            if (file instanceof TFile && 
+                file.extension === 'md' && 
+                file.path.startsWith(folder.path)) {
+                markdownFiles.push(file);
+            }
+        }
+        
+        return markdownFiles;
+    }
 
     async runPythonScript(scanPathFromModal: string, scoringModeFromModal: "force" | "smart" | "skip"): Promise<boolean> {
         return new Promise(async (resolve) => {
