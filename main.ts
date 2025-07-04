@@ -80,9 +80,9 @@ class RunPluginModal extends Modal {
 
         new Setting(contentEl)
             .setName('扫描目标文件夹 (可选)')
-            .setDesc('逗号分隔的仓库相对文件夹路径。如果为空，则扫描整个仓库 (会遵循全局排除设置)。例如：笔记, 知识库/文章')
+            .setDesc('逗号分隔的仓库相对文件夹路径。请使用正斜杠 "/" 作为路径分隔符。输入“/”则扫描整个仓库 (会遵循全局排除设置)。例如：笔记/文件夹, 知识库/文章')
             .addText(text => text
-                .setPlaceholder('留空则扫描整个仓库，或例如：文件夹1, 文件夹2/子文件夹')
+                .setPlaceholder('输入“/”扫描整个仓库，或例如：文件夹1/子文件夹, 文件夹2')
                 .setValue(this.options.scanPath)
                 .onChange(value => {
                     this.options.scanPath = value.trim();
@@ -162,7 +162,7 @@ class CalculateHashModal extends Modal {
         
         const descEl = settingDiv.createDiv();
         descEl.addClass('setting-item-description');
-        descEl.setText('请输入要计算哈希值的笔记的仓库相对路径 (例如：文件夹/笔记.md)。');
+        descEl.setText('请输入要计算哈希值的笔记的仓库相对路径。请使用正斜杠 "/" 作为路径分隔符 (例如：文件夹/笔记.md)。');
         
         // 创建路径输入控件容器
         const inputContainer = settingDiv.createDiv();
@@ -319,7 +319,7 @@ class UpdateHashesModal extends Modal {
         
         const descEl = settingDiv.createDiv();
         descEl.addClass('setting-item-description');
-        descEl.setText('请输入一个或多个仓库相对路径 (用英文逗号 "," 分隔)，用于更新其在嵌入文件中的哈希值。可以是具体文件或文件夹。');
+        descEl.setText('请输入一个或多个仓库相对路径 (用英文逗号 "," 分隔)。请使用正斜杠 "/" 作为路径分隔符。可以是具体文件或文件夹 (例如：文件夹1/笔记.md, 文件夹2/)。');
         
         // 创建路径输入控件容器
         const inputContainer = settingDiv.createDiv();
@@ -965,7 +965,7 @@ export default class JinaLinkerPlugin extends Plugin {
                 args.push('--deepseek_model_name', this.settings.deepseekModelName);
             }
             
-            if (scanPathFromModal && scanPathFromModal.trim()) {
+            if (scanPathFromModal && scanPathFromModal.trim() !== '/') {
                 args.push('--scan_target_folders');
                 const folders = scanPathFromModal.split(',').map(f => f.trim()).filter(f => f);
                 args = args.concat(folders);
@@ -1043,20 +1043,17 @@ export default class JinaLinkerPlugin extends Plugin {
             let processedFileCount = 0;
             let updatedFileCount = 0;
 
-            const targetFolderPaths = targetFoldersOption.split(',').map(p => p.trim().replace(/\\/g, '/')).filter(p => p);
-            const shouldProcessAll = targetFolderPaths.length === 0;
+            const targetFolderPaths = targetFoldersOption.split(',').map(p => p.trim()).filter(p => p);
+            const shouldProcessAll = targetFolderPaths.length === 0 || (targetFolderPaths.length === 1 && targetFolderPaths[0] === '/');
             console.log(`JinaLinker: 将为 ${allMarkdownFiles.length} 个 Markdown 文件执行链接插入 (遵循目标文件夹选项: '${targetFoldersOption || '仓库根目录'}').`);
 
             for (const file of allMarkdownFiles) {
                 let inTargetFolder = shouldProcessAll;
                 if (!shouldProcessAll) {
                     for (const targetFolder of targetFolderPaths) {
-                        const normalizedTarget = targetFolder === '/' ? '/' : targetFolder.endsWith('/') ? targetFolder.slice(0, -1) : targetFolder;
-                        const filePathNormalized = file.path.replace(/\\/g, '/');
-                        if (normalizedTarget === '/' && !filePathNormalized.includes('/')) { 
-                            inTargetFolder = true; break; 
-                        }
-                        if (filePathNormalized.startsWith(normalizedTarget + '/')) {
+                        const normalizedTarget = targetFolder.endsWith('/') ? targetFolder.slice(0, -1) : targetFolder;
+                        const filePathNormalized = file.path;
+                        if (filePathNormalized.startsWith(normalizedTarget + '/') || filePathNormalized === normalizedTarget) {
                             inTargetFolder = true; break;
                         }
                     }

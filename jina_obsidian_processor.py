@@ -693,7 +693,7 @@ def main():
     embeddings_file_path = os.path.join(output_dir_abs, "jina_embeddings.json")
     
     # 处理扫描目标文件夹参数
-    if not args.scan_target_folders or len(args.scan_target_folders) == 0:
+    if not args.scan_target_folders or (len(args.scan_target_folders) == 1 and args.scan_target_folders[0] == '/'):
         scan_target_folder_abs = project_root_abs
         scan_target_folder_rel = "/"
     else:

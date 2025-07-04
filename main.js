@@ -77,7 +77,7 @@ var RunPluginModal = class extends import_obsidian.Modal {
     const { contentEl } = this;
     contentEl.empty();
     contentEl.createEl("h2", { text: "\u914D\u7F6E Jina Linker \u8FD0\u884C\u53C2\u6570" });
-    new import_obsidian.Setting(contentEl).setName("\u626B\u63CF\u76EE\u6807\u6587\u4EF6\u5939 (\u53EF\u9009)").setDesc("\u9017\u53F7\u5206\u9694\u7684\u4ED3\u5E93\u76F8\u5BF9\u6587\u4EF6\u5939\u8DEF\u5F84\u3002\u5982\u679C\u4E3A\u7A7A\uFF0C\u5219\u626B\u63CF\u6574\u4E2A\u4ED3\u5E93 (\u4F1A\u9075\u5FAA\u5168\u5C40\u6392\u9664\u8BBE\u7F6E)\u3002\u4F8B\u5982\uFF1A\u7B14\u8BB0, \u77E5\u8BC6\u5E93/\u6587\u7AE0").addText((text) => text.setPlaceholder("\u7559\u7A7A\u5219\u626B\u63CF\u6574\u4E2A\u4ED3\u5E93\uFF0C\u6216\u4F8B\u5982\uFF1A\u6587\u4EF6\u59391, \u6587\u4EF6\u59392/\u5B50\u6587\u4EF6\u5939").setValue(this.options.scanPath).onChange((value) => {
+    new import_obsidian.Setting(contentEl).setName("\u626B\u63CF\u76EE\u6807\u6587\u4EF6\u5939 (\u53EF\u9009)").setDesc('\u9017\u53F7\u5206\u9694\u7684\u4ED3\u5E93\u76F8\u5BF9\u6587\u4EF6\u5939\u8DEF\u5F84\u3002\u8BF7\u4F7F\u7528\u6B63\u659C\u6760 "/" \u4F5C\u4E3A\u8DEF\u5F84\u5206\u9694\u7B26\u3002\u8F93\u5165\u201C/\u201D\u5219\u626B\u63CF\u6574\u4E2A\u4ED3\u5E93 (\u4F1A\u9075\u5FAA\u5168\u5C40\u6392\u9664\u8BBE\u7F6E)\u3002\u4F8B\u5982\uFF1A\u7B14\u8BB0/\u6587\u4EF6\u5939, \u77E5\u8BC6\u5E93/\u6587\u7AE0').addText((text) => text.setPlaceholder("\u8F93\u5165\u201C/\u201D\u626B\u63CF\u6574\u4E2A\u4ED3\u5E93\uFF0C\u6216\u4F8B\u5982\uFF1A\u6587\u4EF6\u59391/\u5B50\u6587\u4EF6\u5939, \u6587\u4EF6\u59392").setValue(this.options.scanPath).onChange((value) => {
       this.options.scanPath = value.trim();
     }));
     new import_obsidian.Setting(contentEl).setName("AI \u667A\u80FD\u8BC4\u5206\u6A21\u5F0F").setDesc("\u51B3\u5B9A\u5982\u4F55\u5904\u7406\u5019\u9009\u94FE\u63A5\u5BF9\u7684 AI \u8BC4\u5206\u3002").addDropdown((dropdown) => dropdown.addOption("smart", "\u667A\u80FD (\u4EC5\u5BF9\u672A\u8BC4\u5206\u7684\u8FDB\u884C\u8BC4\u5206)").addOption("force", "\u5F3A\u5236\u91CD\u65B0\u8BC4\u5206 (\u5BF9\u6240\u6709\u8FDB\u884C\u8BC4\u5206)").addOption("skip", "\u8DF3\u8FC7 AI \u8BC4\u5206").setValue(this.options.scoringMode).onChange((value) => {
@@ -122,7 +122,7 @@ var CalculateHashModal = class extends import_obsidian.Modal {
     settingDiv.addClass("jina-setting");
     const descEl = settingDiv.createDiv();
     descEl.addClass("setting-item-description");
-    descEl.setText("\u8BF7\u8F93\u5165\u8981\u8BA1\u7B97\u54C8\u5E0C\u503C\u7684\u7B14\u8BB0\u7684\u4ED3\u5E93\u76F8\u5BF9\u8DEF\u5F84 (\u4F8B\u5982\uFF1A\u6587\u4EF6\u5939/\u7B14\u8BB0.md)\u3002");
+    descEl.setText('\u8BF7\u8F93\u5165\u8981\u8BA1\u7B97\u54C8\u5E0C\u503C\u7684\u7B14\u8BB0\u7684\u4ED3\u5E93\u76F8\u5BF9\u8DEF\u5F84\u3002\u8BF7\u4F7F\u7528\u6B63\u659C\u6760 "/" \u4F5C\u4E3A\u8DEF\u5F84\u5206\u9694\u7B26 (\u4F8B\u5982\uFF1A\u6587\u4EF6\u5939/\u7B14\u8BB0.md)\u3002');
     const inputContainer = settingDiv.createDiv();
     inputContainer.addClass("jina-path-input-container");
     this.inputEl = document.createElement("input");
@@ -239,7 +239,7 @@ var UpdateHashesModal = class extends import_obsidian.Modal {
     settingDiv.addClass("jina-setting");
     const descEl = settingDiv.createDiv();
     descEl.addClass("setting-item-description");
-    descEl.setText('\u8BF7\u8F93\u5165\u4E00\u4E2A\u6216\u591A\u4E2A\u4ED3\u5E93\u76F8\u5BF9\u8DEF\u5F84 (\u7528\u82F1\u6587\u9017\u53F7 "," \u5206\u9694)\uFF0C\u7528\u4E8E\u66F4\u65B0\u5176\u5728\u5D4C\u5165\u6587\u4EF6\u4E2D\u7684\u54C8\u5E0C\u503C\u3002\u53EF\u4EE5\u662F\u5177\u4F53\u6587\u4EF6\u6216\u6587\u4EF6\u5939\u3002');
+    descEl.setText('\u8BF7\u8F93\u5165\u4E00\u4E2A\u6216\u591A\u4E2A\u4ED3\u5E93\u76F8\u5BF9\u8DEF\u5F84 (\u7528\u82F1\u6587\u9017\u53F7 "," \u5206\u9694)\u3002\u8BF7\u4F7F\u7528\u6B63\u659C\u6760 "/" \u4F5C\u4E3A\u8DEF\u5F84\u5206\u9694\u7B26\u3002\u53EF\u4EE5\u662F\u5177\u4F53\u6587\u4EF6\u6216\u6587\u4EF6\u5939 (\u4F8B\u5982\uFF1A\u6587\u4EF6\u59391/\u7B14\u8BB0.md, \u6587\u4EF6\u59392/)\u3002');
     const inputContainer = settingDiv.createDiv();
     inputContainer.addClass("jina-path-input-container");
     this.inputEl = document.createElement("textarea");
@@ -758,7 +758,7 @@ ${fileContent}`;
         args.push("--deepseek_api_key", this.settings.deepseekApiKey);
         args.push("--deepseek_model_name", this.settings.deepseekModelName);
       }
-      if (scanPathFromModal && scanPathFromModal.trim()) {
+      if (scanPathFromModal && scanPathFromModal.trim() !== "/") {
         args.push("--scan_target_folders");
         const folders = scanPathFromModal.split(",").map((f) => f.trim()).filter((f) => f);
         args = args.concat(folders);
@@ -821,20 +821,16 @@ ${fileContent}`;
       const allMarkdownFiles = this.app.vault.getMarkdownFiles();
       let processedFileCount = 0;
       let updatedFileCount = 0;
-      const targetFolderPaths = targetFoldersOption.split(",").map((p) => p.trim().replace(/\\/g, "/")).filter((p) => p);
-      const shouldProcessAll = targetFolderPaths.length === 0;
+      const targetFolderPaths = targetFoldersOption.split(",").map((p) => p.trim()).filter((p) => p);
+      const shouldProcessAll = targetFolderPaths.length === 0 || targetFolderPaths.length === 1 && targetFolderPaths[0] === "/";
       console.log(`JinaLinker: \u5C06\u4E3A ${allMarkdownFiles.length} \u4E2A Markdown \u6587\u4EF6\u6267\u884C\u94FE\u63A5\u63D2\u5165 (\u9075\u5FAA\u76EE\u6807\u6587\u4EF6\u5939\u9009\u9879: '${targetFoldersOption || "\u4ED3\u5E93\u6839\u76EE\u5F55"}').`);
       for (const file of allMarkdownFiles) {
         let inTargetFolder = shouldProcessAll;
         if (!shouldProcessAll) {
           for (const targetFolder of targetFolderPaths) {
-            const normalizedTarget = targetFolder === "/" ? "/" : targetFolder.endsWith("/") ? targetFolder.slice(0, -1) : targetFolder;
-            const filePathNormalized = file.path.replace(/\\/g, "/");
-            if (normalizedTarget === "/" && !filePathNormalized.includes("/")) {
-              inTargetFolder = true;
-              break;
-            }
-            if (filePathNormalized.startsWith(normalizedTarget + "/")) {
+            const normalizedTarget = targetFolder.endsWith("/") ? targetFolder.slice(0, -1) : targetFolder;
+            const filePathNormalized = file.path;
+            if (filePathNormalized.startsWith(normalizedTarget + "/") || filePathNormalized === normalizedTarget) {
               inTargetFolder = true;
               break;
             }
