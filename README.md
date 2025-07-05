@@ -12,9 +12,11 @@ Jina AI Linker是一个强大的Obsidian插件，专为知识库管理而设计�
 
 - **AI智能链接推荐**：分析笔记内容，自动推荐相关度高的笔记链接
 - **嵌入向量相似度匹配**：利用Jina AI技术计算笔记内容的语义相似度
-- **智能评分过滤**：使用DeepSeek AI对候选链接进行智能打分，筛选最相关的链接
+- **多AI提供商支持**：支持DeepSeek、OpenAI、Claude、Gemini等多种AI模型进行智能评分
+- **灵活的AI配置**：用户可自由选择AI提供商，配置API密钥和模型参数
 - **链接自动插入**：在笔记中自动插入高质量的建议链接，减少手动工作
 - **内容哈希追踪**：通过内容哈希检测笔记变更，智能更新链接建议
+- **安全的密钥管理**：API密钥安全存储，支持密码隐藏显示
 
 ## 安装方法
 
@@ -29,7 +31,12 @@ Jina AI Linker是一个强大的Obsidian插件，专为知识库管理而设计�
 
 1. 安装Python（3.8或更高版本）
 2. 获取[Jina AI API密钥](https://jina.ai)（必需）
-3. 获取[DeepSeek API密钥](https://deepseek.ai)（可选，用于AI智能评分）
+3. 获取至少一个AI提供商的API密钥（用于智能评分）：
+   - [DeepSeek API密钥](https://deepseek.ai)（推荐，性价比高）
+   - [OpenAI API密钥](https://openai.com)（GPT模型）
+   - [Claude API密钥](https://anthropic.com)（Anthropic）
+   - [Gemini API密钥](https://ai.google.dev)（Google）
+   - 或其他OpenAI兼容的API服务
 
 ### 基本使用流程
 
@@ -83,7 +90,13 @@ date: 2023-01-01
 ### API密钥
 
 - **Jina API密钥**：用于生成文本嵌入向量
-- **DeepSeek API密钥**：用于AI对候选链接进行智能评分（可选）
+
+### AI智能评分配置
+
+- **AI提供商选择**：支持DeepSeek、OpenAI、Claude、Gemini、自定义等多种AI提供商
+- **API配置**：为选中的AI提供商配置API URL、密钥和模型名称
+- **模型建议**：提供常用模型的快速选择按钮
+- **安全存储**：API密钥以密码形式显示，安全保存在本地配置中
 
 ### Python脚本处理参数
 
@@ -95,8 +108,7 @@ date: 2023-01-01
 
 - **Jina模型名称**：用于生成嵌入的模型
 - **Jina嵌入最大字符数**：传递给Jina API的最大字符数
-- **DeepSeek模型名称**：用于AI评分的模型
-- **AI评分内容最大长度**：传递给DeepSeek API的最大字符数
+- **AI评分内容最大长度**：传递给AI API的最大字符数
 - **每源笔记送交AI评分的最大候选链接数**：每个源笔记最多评分的候选数
 
 ### 链接插入与哈希设置
@@ -125,9 +137,15 @@ date: 2023-01-01
 
 ## 隐私说明
 
-- 笔记内容会通过API发送给Jina AI和DeepSeek（如配置）进行处理
+- 笔记内容会通过API发送给Jina AI和您选择的AI提供商（如DeepSeek、OpenAI等）进行处理
 - 所有数据处理结果均存储在本地，不会上传到其他服务器
-- 请查阅[Jina AI隐私政策](https://jina.ai/privacy)和[DeepSeek隐私政策](https://deepseek.ai/privacy)了解更多信息
+- API密钥安全存储在本地配置文件中，不会被传输或共享
+- 请查阅相关AI提供商的隐私政策了解更多信息：
+  - [Jina AI隐私政策](https://jina.ai/privacy)
+  - [DeepSeek隐私政策](https://deepseek.ai/privacy)
+  - [OpenAI隐私政策](https://openai.com/privacy)
+  - [Anthropic隐私政策](https://anthropic.com/privacy)
+  - [Google AI隐私政策](https://ai.google/responsibility/responsible-ai-practices/)
 
 ## 反馈与贡献
 

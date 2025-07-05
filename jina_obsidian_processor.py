@@ -12,6 +12,7 @@ import fnmatch
 import yaml # 用于解析 frontmatter
 import sys
 import io
+from pathlib import Path # For path operations
 
 # Ensure stdout and stderr use UTF-8 encoding
 if sys.stdout.encoding != 'utf-8':
@@ -24,10 +25,32 @@ JINA_API_URL = "https://api.jina.ai/v1/embeddings"
 JINA_API_REQUEST_DELAY = 0.1 # Jina API 请求之间的延迟时间（秒）
 # DEFAULT_EMBEDDINGS_FILE_NAME, DEFAULT_CANDIDATES_FILE_NAME etc. are used as argparse defaults below
 
-# --- DeepSeek AI 打分相关配置 (只保留脚本内部固定或真正意义上的常量) ---
-DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
-DEEPSEEK_API_REQUEST_DELAY_SECONDS = 1.0 # DeepSeek API 调用之间的默认延迟时间（秒）
-# Other DeepSeek related defaults are in argparse
+# --- AI 打分相关配置 ---
+AI_API_REQUEST_DELAY_SECONDS = 1.0 # AI API 调用之间的默认延迟时间（秒）
+
+# AI 提供商默认配置
+DEFAULT_AI_CONFIGS = {
+    'deepseek': {
+        'api_url': 'https://api.deepseek.com/chat/completions',
+        'model_name': 'deepseek-chat'
+    },
+    'openai': {
+        'api_url': 'https://api.openai.com/v1/chat/completions',
+        'model_name': 'gpt-4o-mini'
+    },
+    'claude': {
+        'api_url': 'https://api.anthropic.com/v1/messages',
+        'model_name': 'claude-3-haiku-20240307'
+    },
+    'gemini': {
+        'api_url': 'https://generativelanguage.googleapis.com/v1beta/models',
+        'model_name': 'gemini-1.5-flash'
+    },
+    'custom': {
+        'api_url': '',
+        'model_name': ''
+    }
+}
 
 # --- Frontmatter Key 常量 ---
 # 此键名现在由脚本内部固定，应与 TypeScript 插件中的常量保持一致
@@ -72,6 +95,9 @@ def write_markdown_with_frontmatter(file_path: str, frontmatter: dict, body: str
     """
     output_content = ""
     if frontmatter:
+        # Use ruamel.yaml for better round-trip preservation if needed, but for simple dump, pyyaml is fine.
+        # For consistency with 1.py, let's use ruamel.yaml's dump if possible, but it's not imported globally.
+        # Sticking to pyyaml's dump for now as it's already imported.
         frontmatter_dump = yaml.dump(frontmatter, allow_unicode=True, default_flow_style=False, sort_keys=False)
         output_content = f"---\n{frontmatter_dump.strip()}\n---\n"
     
@@ -385,8 +411,19 @@ def generate_candidate_pairs(embeddings_data_input: dict, similarity_threshold: 
                 print(f"  已比较 {processed_pairs_count}/{total_comparisons} 对笔记...")
 
             if similarity >= similarity_threshold:
-                candidate_pairs.append({"source_path": path1, "target_path": path2, "jina_similarity": similarity})
-                candidate_pairs.append({"source_path": path2, "target_path": path1, "jina_similarity": similarity})
+                # 生成双向关系，但避免在AI打分阶段重复处理
+                candidate_pairs.append({
+                    "source_path": path1, 
+                    "target_path": path2, 
+                    "jina_similarity": similarity,
+                    "pair_id": f"{min(path1, path2)}<->{max(path1, path2)}"  # 唯一标识符
+                })
+                candidate_pairs.append({
+                    "source_path": path2, 
+                    "target_path": path1, 
+                    "jina_similarity": similarity,
+                    "pair_id": f"{min(path1, path2)}<->{max(path1, path2)}"  # 相同的标识符
+                })
     
     final_map = {}
     for p in candidate_pairs:
@@ -408,19 +445,21 @@ def generate_candidate_pairs(embeddings_data_input: dict, similarity_threshold: 
 
 # REMOVED: get_deepseek_api_key function. Key is passed directly.
 
-def call_deepseek_api_for_pair_relevance(
+def call_ai_api_for_pair_relevance(
     source_body_content: str, 
     target_body_content: str, 
     source_file_path: str,
     target_file_path: str, 
-    api_key: str, # DeepSeek API Key directly
-    # --- Added parameters ---
-    deepseek_model_name_to_use: str,
+    api_key: str,
+    # --- AI provider parameters ---
+    ai_provider: str,
+    ai_api_url: str,
+    ai_model_name: str,
     max_content_length_for_ai_to_use: int,
     hash_boundary_marker_to_use: str
 ) -> dict:
     if not api_key:
-        print(f"错误：DeepSeek API Key 未配置。无法为 {source_file_path} -> {target_file_path} 打分。")
+        print(f"错误：{ai_provider} API Key 未配置。无法为 {source_file_path} -> {target_file_path} 打分。")
         return {"ai_score": -1, "error": "API Key not configured"}
 
     source_file_name = os.path.basename(source_file_path)
@@ -433,79 +472,172 @@ def call_deepseek_api_for_pair_relevance(
         missing_marker_info = []
         if processed_source_body is None: missing_marker_info.append(f"源笔记({source_file_path})")
         if processed_target_body is None: missing_marker_info.append(f"目标笔记({target_file_path})")
-        error_msg = f"Missing HASH_BOUNDARY_MARKER ('{HASH_BOUNDARY_MARKER}') in {', '.join(missing_marker_info)}"
-        print(f"DeepSeek API 跳过: {error_msg}")
+        error_msg = f"Missing HASH_BOUNDARY_MARKER ('{hash_boundary_marker_to_use}') in {', '.join(missing_marker_info)}"
+        print(f"{ai_provider} API 跳过: {error_msg}")
         return {"ai_score": -1, "error": error_msg}
 
     source_excerpt = processed_source_body[:max_content_length_for_ai_to_use]
     target_excerpt = processed_target_body[:max_content_length_for_ai_to_use]
 
-    prompt = f"""
-你是一个 Obsidian 笔记链接评估助手。请直接比较以下【源笔记内容】和【目标笔记内容】，判断它们之间的相关性。
+    # 构建请求体和头部，根据不同AI提供商调整
+    request_body, headers = build_ai_request(
+        ai_provider, ai_model_name, api_key, source_file_name, target_file_name,
+        source_excerpt, target_excerpt, max_content_length_for_ai_to_use
+    )
+
+    print(f"  AI打分 (调用{ai_provider} API): {source_file_path} -> {target_file_path}")
+    try:
+        # 对于Gemini，需要在URL中添加API密钥
+        if ai_provider == 'gemini':
+            # 构建完整的Gemini API URL
+            model_path = ai_model_name if ai_model_name else 'gemini-1.5-flash'
+            full_url = f"{ai_api_url}/{model_path}:generateContent?key={api_key}"
+        else:
+            full_url = ai_api_url
+            
+        # Delay is handled by the caller (score_candidates_and_update_frontmatter)
+        response = requests.post(full_url, headers=headers, json=request_body, timeout=45)
+        
+        if not response.ok:
+            error_message = f"{ai_provider} API 失败 {source_file_path}->{target_file_path}: HTTP {response.status_code}"
+            try: error_message += f" - {response.json()}"
+            except json.JSONDecodeError: error_message += f" - {response.text[:200]}"
+            print(error_message)
+            return {"ai_score": -1, "error": f"API Error: HTTP {response.status_code}"}
+
+        # 解析响应，根据不同AI提供商调整
+        score = parse_ai_response(response, ai_provider, source_file_path, target_file_path)
+        if score is not None:
+            return {"ai_score": score}
+        else:
+            return {"ai_score": -1, "error": "Failed to parse AI response"}
+            
+    except requests.exceptions.Timeout:
+        print(f"{ai_provider} API 超时 {source_file_path}->{target_file_path}")
+        return {"ai_score": -1, "error": "API call timed out"}
+    except Exception as e_unknown: # Catch broader exceptions
+        print(f"{ai_provider} API 未知错误 {source_file_path}->{target_file_path}: {e_unknown}")
+        return {"ai_score": -1, "error": f"Unknown API call error: {e_unknown}"}
+
+
+def build_ai_request(ai_provider: str, model_name: str, api_key: str, 
+                    source_file_name: str, target_file_name: str,
+                    source_excerpt: str, target_excerpt: str, 
+                    max_content_length: int) -> tuple[dict, dict]:
+    """构建不同AI提供商的请求体和头部"""
+    
+    prompt = f"""你是一个 Obsidian 笔记链接评估助手。请直接比较以下【源笔记内容】和【目标笔记内容】，判断它们之间的相关性。
 你的任务是评估从源笔记指向目标笔记建立一个链接是否合适。
 请给出 0-10 之间的整数评分，其中 10 表示极其相关，7-9 表示比较相关，6 表示你认为合格的相关性，1-5 表示弱相关，0 表示不相关或无法判断。
 
 源笔记文件名: {source_file_name}
 目标笔记文件名: {target_file_name}
 
-【源笔记内容】(最多 {max_content_length_for_ai_to_use} 字符):
+【源笔记内容】(最多 {max_content_length} 字符):
 ---
 {source_excerpt}
 ---
 
-【目标笔记内容】(最多 {max_content_length_for_ai_to_use} 字符):
+【目标笔记内容】(最多 {max_content_length} 字符):
 ---
 {target_excerpt}
 ---
 
 请严格按照以下 JSON 格式返回你的评分: {{"relevance_score": <你的评分>}}
 例如: {{"relevance_score": 8}}
-返回纯粹的JSON，不包含任何Markdown标记。
-"""
-    request_body = {
-        "model": deepseek_model_name_to_use, # Use passed model name
-        "messages": [{"role": "user", "content": prompt}],
-        "response_format": {"type": "json_object"},
-        "stream": False
-    }
-    headers = {'Content-Type': 'application/json', 'Authorization': f'Bearer {api_key}'}
+返回纯粹的JSON，不包含任何Markdown标记。"""
 
-    print(f"  AI打分 (调用API): {source_file_path} -> {target_file_path}")
-    try:
-        # Delay is handled by the caller (score_candidates_and_update_frontmatter)
-        response = requests.post(DEEPSEEK_API_URL, headers=headers, json=request_body, timeout=45)
+    if ai_provider == 'claude':
+        # Claude API 格式
+        request_body = {
+            "model": model_name,
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": prompt}]
+        }
+        headers = {
+            'Content-Type': 'application/json',
+            'x-api-key': api_key,
+            'anthropic-version': '2023-06-01'
+        }
+    elif ai_provider == 'gemini':
+        # Gemini API 格式
+        request_body = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "response_mime_type": "application/json"
+            }
+        }
+        headers = {
+            'Content-Type': 'application/json'
+        }
+    else:
+        # OpenAI 兼容格式 (DeepSeek, OpenAI, Custom)
+        request_body = {
+            "model": model_name,
+            "messages": [{"role": "user", "content": prompt}],
+            "stream": False
+        }
+        if ai_provider in ['deepseek', 'openai']:
+            request_body["response_format"] = {"type": "json_object"}
         
-        if not response.ok:
-            error_message = f"DeepSeek API 失败 {source_file_path}->{target_file_path}: HTTP {response.status_code}"
-            try: error_message += f" - {response.json()}"
-            except json.JSONDecodeError: error_message += f" - {response.text[:200]}"
-            print(error_message)
-            return {"ai_score": -1, "error": f"API Error: HTTP {response.status_code}"}
+        headers = {
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {api_key}'
+        }
+    
+    return request_body, headers
 
+
+def parse_ai_response(response: requests.Response, ai_provider: str, 
+                     source_file_path: str, target_file_path: str) -> int | None:
+    """解析不同AI提供商的响应"""
+    try:
         data = response.json()
-        if data and data.get("choices") and data["choices"][0].get("message", {}).get("content"):
-            message_content_str = data["choices"][0]["message"]["content"]
-            try:
-                cleaned_json_str = re.sub(r'^```json\s*|\s*```$', '', message_content_str.strip(), flags=re.DOTALL)
-                parsed_json = json.loads(cleaned_json_str)
-                if isinstance(parsed_json.get("relevance_score"), (int, float)):
-                    score = max(0, min(10, round(float(parsed_json["relevance_score"]))))
-                    return {"ai_score": score}
+        
+        if ai_provider == 'claude':
+            # Claude 响应格式
+            if data and data.get("content") and len(data["content"]) > 0:
+                message_content_str = data["content"][0].get("text", "")
+            else:
+                print(f"Claude API 响应格式不符 {source_file_path}->{target_file_path}: {data}")
+                return None
+        elif ai_provider == 'gemini':
+            # Gemini 响应格式
+            if data and data.get("candidates") and len(data["candidates"]) > 0:
+                content = data["candidates"][0].get("content", {})
+                if content.get("parts") and len(content["parts"]) > 0:
+                    message_content_str = content["parts"][0].get("text", "")
                 else:
-                    print(f"DeepSeek API JSON 结构不完整 {source_file_path}->{target_file_path}: {parsed_json}")
-                    return {"ai_score": -1, "error": "AI incomplete JSON score"}
-            except json.JSONDecodeError as e_json:
-                print(f"DeepSeek API 响应非JSON {source_file_path}->{target_file_path}: '{message_content_str}', Error: {e_json}")
-                return {"ai_score": -1, "error": f"AI response not valid JSON: {e_json}"}
+                    print(f"Gemini API 响应格式不符 {source_file_path}->{target_file_path}: {data}")
+                    return None
+            else:
+                print(f"Gemini API 响应格式不符 {source_file_path}->{target_file_path}: {data}")
+                return None
         else:
-             print(f"DeepSeek API 响应格式不符 {source_file_path}->{target_file_path}: {data}")
-             return {"ai_score": -1, "error": "AI response format unexpected"}
-    except requests.exceptions.Timeout:
-        print(f"DeepSeek API 超时 {source_file_path}->{target_file_path}")
-        return {"ai_score": -1, "error": "API call timed out"}
-    except Exception as e_unknown: # Catch broader exceptions
-        print(f"DeepSeek API 未知错误 {source_file_path}->{target_file_path}: {e_unknown}")
-        return {"ai_score": -1, "error": f"Unknown API call error: {e_unknown}"}
+            # OpenAI 兼容格式
+            if data and data.get("choices") and data["choices"][0].get("message", {}).get("content"):
+                message_content_str = data["choices"][0]["message"]["content"]
+            else:
+                print(f"{ai_provider} API 响应格式不符 {source_file_path}->{target_file_path}: {data}")
+                return None
+        
+        # 解析JSON评分
+        try:
+            cleaned_json_str = re.sub(r'^```json\s*|\s*```$', '', message_content_str.strip(), flags=re.DOTALL)
+            parsed_json = json.loads(cleaned_json_str)
+            if isinstance(parsed_json.get("relevance_score"), (int, float)):
+                score = max(0, min(10, round(float(parsed_json["relevance_score"]))))
+                return score
+            else:
+                print(f"{ai_provider} API JSON 结构不完整 {source_file_path}->{target_file_path}: {parsed_json}")
+                return None
+        except json.JSONDecodeError as e_json:
+            print(f"{ai_provider} API 响应非JSON {source_file_path}->{target_file_path}: '{message_content_str}', Error: {e_json}")
+            return None
+            
+    except json.JSONDecodeError as e:
+        print(f"{ai_provider} API 响应解析失败 {source_file_path}->{target_file_path}: {e}")
+        return None
 
 
 def normalize_path_python(path_str: str) -> str:
@@ -515,20 +647,117 @@ def normalize_path_python(path_str: str) -> str:
 def score_candidates_and_update_frontmatter(
     candidate_pairs_list: list,
     project_root_abs: str,
-    deepseek_api_key_to_use: str, # Passed from main
-    # --- Added parameters from args ---
-    deepseek_model_name_to_use: str,
+    # --- AI provider parameters ---
+    ai_provider: str,
+    ai_api_url: str,
+    ai_api_key: str,
+    ai_model_name: str,
+    # --- Other parameters ---
     max_content_length_for_ai_to_use: int,
     max_candidates_per_source_for_ai_scoring_to_use: int,
     hash_boundary_marker_to_use: str,
-    # --- Modified parameter ---
-    force_rescore: bool # This is now directly controlled by ai_scoring_mode logic in main
+    force_rescore: bool
 ):
-    if not deepseek_api_key_to_use: # This check is now primary
-        print("错误：DeepSeek API Key 未提供，跳过 AI 打分流程。")
+    if not ai_api_key: # This check is now primary
+        print(f"错误：{ai_provider} API Key 未提供，跳过 AI 打分流程。")
         return
 
     updated_files_count = 0
+    
+    # 🔥 新增：AI打分去重逻辑
+    print("正在对候选对进行去重以避免重复AI打分...")
+    unique_pairs_for_ai = {}  # 存储唯一的关系对，用于AI打分
+    ai_score_cache = {}       # 缓存AI评分结果
+    
+    # 🔥 新增：加载已有的AI评分数据
+    ai_scores_file_path = os.path.join(os.path.dirname(project_root_abs), ".Jina-AI-Linker-Output", "ai_scores.json")
+    if os.path.exists(os.path.join(project_root_abs, ".Jina-AI-Linker-Output")):
+        ai_scores_file_path = os.path.join(project_root_abs, ".Jina-AI-Linker-Output", "ai_scores.json")
+    
+    existing_ai_scores = load_ai_scores_from_json(ai_scores_file_path)
+    ai_score_cache.update(existing_ai_scores)  # 预填充缓存
+    
+    # 第一步：识别唯一的关系对（用于AI打分）
+    for pair in candidate_pairs_list:
+        pair_id = pair.get("pair_id")
+        if pair_id and pair_id not in unique_pairs_for_ai:
+            # 选择字典序较小的作为AI打分的"主"方向
+            source_path = pair["source_path"]
+            target_path = pair["target_path"]
+            if source_path < target_path:
+                unique_pairs_for_ai[pair_id] = pair
+            # 如果当前pair的source > target，等待反向pair
+        elif pair_id and pair_id in unique_pairs_for_ai:
+            # 检查是否需要更新为字典序更小的方向
+            existing_pair = unique_pairs_for_ai[pair_id]
+            if pair["source_path"] < existing_pair["source_path"]:
+                unique_pairs_for_ai[pair_id] = pair
+    
+    print(f"去重后需要AI打分的唯一关系对数量: {len(unique_pairs_for_ai)} (原始: {len(candidate_pairs_list)})")
+    
+    # 第二步：对唯一的关系对进行AI打分
+    total_unique_pairs = len(unique_pairs_for_ai)
+    processed_unique_pairs = 0
+    
+    for pair_id, pair in unique_pairs_for_ai.items():
+        processed_unique_pairs += 1
+        source_path = pair["source_path"]
+        target_path = pair["target_path"]
+        
+        print(f"  AI打分唯一对 ({processed_unique_pairs}/{total_unique_pairs}): {source_path} <-> {target_path}")
+        
+        # 检查是否已经有AI评分（如果不是强制重新评分）
+        if not force_rescore and pair_id in ai_score_cache:
+            print(f"    AI评分已存在于缓存中 (评分: {ai_score_cache[pair_id]}/10)，跳过")
+            continue
+        
+        # 读取文件内容进行AI打分
+        source_abs_path = os.path.join(project_root_abs, source_path)
+        target_abs_path = os.path.join(project_root_abs, target_path)
+        
+        if not os.path.exists(source_abs_path) or not os.path.exists(target_abs_path):
+            print(f"    警告：文件不存在，跳过AI打分")
+            continue
+            
+        try:
+            source_body, _, _ = read_markdown_with_frontmatter(source_abs_path)
+            target_body, _, _ = read_markdown_with_frontmatter(target_abs_path)
+            
+            clean_source_body = extract_content_for_hashing(source_body)
+            clean_target_body = extract_content_for_hashing(target_body)
+            
+            if clean_source_body is None or clean_target_body is None:
+                print(f"    警告：缺少哈希边界标记，跳过AI打分")
+                continue
+                
+            # 执行AI打分（只调用一次API）
+            time.sleep(AI_API_REQUEST_DELAY_SECONDS)
+            
+            ai_result = call_ai_api_for_pair_relevance(
+                clean_source_body,
+                clean_target_body,
+                source_path,
+                target_path,
+                ai_api_key,
+                ai_provider,
+                ai_api_url,
+                ai_model_name,
+                max_content_length_for_ai_to_use,
+                hash_boundary_marker_to_use
+            )
+            
+            if "ai_score" in ai_result and ai_result["ai_score"] != -1:
+                ai_score = ai_result["ai_score"]
+                ai_score_cache[pair_id] = ai_score
+                print(f"    AI评分成功: {ai_score}/10")
+            else:
+                print(f"    AI评分失败: {ai_result.get('error', '未知错误')}")
+                
+        except Exception as e:
+            print(f"    AI打分异常: {e}")
+    
+    # 第三步：将AI评分结果写入所有相关文件的frontmatter
+    print(f"\n开始将AI评分结果写入文件frontmatter...")
     candidates_by_source = {}
     for pair in candidate_pairs_list:
         source_path = pair["source_path"]
@@ -586,42 +815,30 @@ def score_candidates_and_update_frontmatter(
                 target_rel_path = pair_info["target_path"]
                 target_abs_path = os.path.join(project_root_abs, target_rel_path)
 
-                print(f"  AI打分 ({processed_ai_pairs_this_run}/{total_pairs_for_ai_consideration} - 源内 {pairs_processed_for_current_source}/{current_source_pairs_to_process}): {source_rel_path} -> {target_rel_path}")
+                print(f"  更新frontmatter ({processed_ai_pairs_this_run}/{total_pairs_for_ai_consideration} - 源内 {pairs_processed_for_current_source}/{current_source_pairs_to_process}): {source_rel_path} -> {target_rel_path}")
 
-                if not force_rescore and target_rel_path in existing_judged_targets_info:
-                    print(f"    AI打分已存在且未强制刷新，跳过。")
-                    continue
-
-                if not os.path.exists(target_abs_path):
-                    print(f"    警告：目标文件 {target_rel_path} 不存在，跳过。")
-                    continue
-
-                tgt_content_body, _, _ = read_markdown_with_frontmatter(target_abs_path)
-                clean_tgt_body = extract_content_for_hashing(tgt_content_body)
-
-                if clean_tgt_body is None:
-                    print(f"    警告：目标文件 {target_rel_path} 缺少哈希边界 \'{HASH_BOUNDARY_MARKER}\'，跳过。")
-                    continue
-                if not clean_tgt_body.strip():
-                    print(f"    警告：目标文件 {target_rel_path} 哈希边界前内容为空，跳过。")
-                    continue
+                # 🔥 使用缓存的AI评分结果
+                pair_id = pair_info.get("pair_id")
+                ai_score_value = None
                 
-                # API Call Delay before each call
-                time.sleep(DEEPSEEK_API_REQUEST_DELAY_SECONDS) # Use internal constant
-                
-                ai_result = call_deepseek_api_for_pair_relevance(
-                    clean_src_body_for_ai, 
-                    clean_tgt_body,
-                    source_rel_path, 
-                    target_rel_path,
-                    deepseek_api_key_to_use, # Pass API key
-                    deepseek_model_name_to_use,
-                    max_content_length_for_ai_to_use,
-                    hash_boundary_marker_to_use
-                )
+                if pair_id and pair_id in ai_score_cache:
+                    # 使用缓存的AI评分
+                    ai_score_value = ai_score_cache[pair_id]
+                    print(f"    使用缓存的AI评分: {ai_score_value}/10")
+                elif not force_rescore and target_rel_path in existing_judged_targets_info:
+                    # 使用已存在的AI评分
+                    existing_entry = existing_judged_targets_info[target_rel_path]
+                    if isinstance(existing_entry, dict) and "aiScore" in existing_entry:
+                        ai_score_value = existing_entry["aiScore"]
+                        print(f"    使用已存在的AI评分: {ai_score_value}/10")
+                    else:
+                        print(f"    AI打分已存在但格式无效，跳过。")
+                        continue
+                else:
+                    print(f"    无可用的AI评分，跳过。")
+                    continue
 
-                if "ai_score" in ai_result and ai_result["ai_score"] != -1:
-                    ai_score_value = ai_result["ai_score"]
+                if ai_score_value is not None:
                     new_ai_entry = {
                         "targetPath": target_rel_path,      
                         "aiScore": ai_score_value,        
@@ -634,9 +851,7 @@ def score_candidates_and_update_frontmatter(
                     ]
                     source_fm_dict[AI_JUDGED_CANDIDATES_FM_KEY].append(new_ai_entry)
                     made_change_to_this_file = True
-                    print(f"    AI评分 ({ai_score_value}/10) 已记录到 {source_rel_path} (目标: {target_rel_path})")
-                else:
-                    print(f"    AI打分失败或无效 (源: {source_rel_path}, 目标: {target_rel_path})。错误: {ai_result.get('error', '未知')}")
+                    print(f"    AI评分 ({ai_score_value}/10) 已更新到 {source_rel_path} frontmatter")
 
             if made_change_to_this_file:
                 source_fm_dict[AI_JUDGED_CANDIDATES_FM_KEY].sort(
@@ -652,7 +867,226 @@ def score_candidates_and_update_frontmatter(
         except Exception as e_outer:
             print(f"  处理源文件 {source_rel_path} AI 打分时发生外部错误: {e_outer}")
 
+    # 🔥 新增：保存AI评分到独立JSON文件
+    save_ai_scores_to_json(ai_score_cache, unique_pairs_for_ai, ai_scores_file_path)
+    
     print(f"\nAI 打分及 Frontmatter 更新完成。更新了 {updated_files_count} 个源文件。处理了 {processed_ai_pairs_this_run}/{total_pairs_for_ai_consideration} 对候选。")
+    print(f"AI评分数据已保存到: {ai_scores_file_path}")
+
+def save_ai_scores_to_json(ai_score_cache: dict, unique_pairs_for_ai: dict, ai_scores_file_path: str):
+    """
+    保存AI评分结果到独立的JSON文件
+    使用智能路径策略：优先使用文件名，冲突时使用完整路径
+    """
+    try:
+        # 加载现有的AI评分数据
+        existing_ai_scores = {}
+        if os.path.exists(ai_scores_file_path):
+            try:
+                with open(ai_scores_file_path, 'r', encoding='utf-8') as f:
+                    existing_data = json.load(f)
+                    existing_ai_scores = existing_data.get("ai_scores", {})
+            except Exception as e:
+                print(f"警告：读取现有AI评分文件失败: {e}")
+        
+        # 使用完整路径存储，无需冲突检测
+        
+        def get_smart_key(path1: str, path2: str) -> str:
+            """生成标准化的键名：使用完整相对路径，按字典序排序"""
+            # 标准化路径分隔符
+            norm_path1 = path1.replace(os.sep, '/')
+            norm_path2 = path2.replace(os.sep, '/')
+            
+            # 按字典序排序，确保一致性
+            return f"{min(norm_path1, norm_path2)}<->{max(norm_path1, norm_path2)}"
+        
+        # 更新AI评分数据
+        updated_count = 0
+        for pair_id, ai_score in ai_score_cache.items():
+            if pair_id in unique_pairs_for_ai:
+                pair_info = unique_pairs_for_ai[pair_id]
+                source_path = pair_info["source_path"]
+                target_path = pair_info["target_path"]
+                
+                # 生成智能键名
+                smart_key = get_smart_key(source_path, target_path)
+                
+                # 创建评分条目
+                score_entry = {
+                    "ai_score": ai_score,
+                    "jina_similarity": round(pair_info["jina_similarity"], 6),
+                    "last_scored": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                    "source_path": source_path,
+                    "target_path": target_path,
+                    "key_type": "full_path"
+                }
+                
+                existing_ai_scores[smart_key] = score_entry
+                updated_count += 1
+        
+        # 构建最终数据结构
+        final_data = {
+            "_metadata": {
+                "version": "1.0",
+                "description": "AI评分数据 - 完整路径存储",
+                "last_updated": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                "total_relationships": len(existing_ai_scores),
+                "storage_strategy": "full_path"
+            },
+            "ai_scores": existing_ai_scores
+        }
+        
+        # 保存到文件
+        os.makedirs(os.path.dirname(ai_scores_file_path), exist_ok=True)
+        with open(ai_scores_file_path, 'w', encoding='utf-8') as f:
+            json.dump(final_data, f, ensure_ascii=False, indent=2)
+        
+        print(f"✅ AI评分数据已保存: {updated_count} 个关系 (使用完整路径存储)")
+            
+    except Exception as e:
+        print(f"❌ 保存AI评分数据失败: {e}")
+
+def load_ai_scores_from_json(ai_scores_file_path: str) -> dict:
+    """
+    从JSON文件加载AI评分数据
+    返回 {pair_id: ai_score} 格式的字典
+    """
+    ai_scores = {}
+    if not os.path.exists(ai_scores_file_path):
+        return ai_scores
+    
+    try:
+        with open(ai_scores_file_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            stored_scores = data.get("ai_scores", {})
+            
+            for key, entry in stored_scores.items():
+                if isinstance(entry, dict) and "ai_score" in entry:
+                    # 将存储的键转换回pair_id格式
+                    source_path = entry.get("source_path", "")
+                    target_path = entry.get("target_path", "")
+                    
+                    if source_path and target_path:
+                        # 生成标准的pair_id
+                        pair_id = f"{min(source_path, target_path)}<->{max(source_path, target_path)}"
+                        ai_scores[pair_id] = entry["ai_score"]
+        
+        print(f"📖 从AI评分文件加载了 {len(ai_scores)} 个评分记录")
+        
+    except Exception as e:
+        print(f"⚠️ 加载AI评分文件失败: {e}")
+    
+    return ai_scores
+
+def build_file_index(vault_root_abs: str, excluded_folders: list = None, excluded_files_patterns: list = None) -> dict[str, str]:
+    """
+    Recursively scans the vault and creates a map of
+    filename -> new relative path (using forward slashes).
+    """
+    print(f"[INFO] Building file index for vault at: {vault_root_abs}...")
+    index = {}
+    
+    all_md_files = list_markdown_files(vault_root_abs, vault_root_abs, excluded_folders, excluded_files_patterns)
+    
+    for file_rel_path in all_md_files:
+        file_name = os.path.basename(file_rel_path)
+        index[file_name] = file_rel_path
+    print(f"[INFO] Index created with {len(index)} files.")
+    return index
+
+def update_target_paths_in_frontmatter_for_single_file(
+    file_abs_path: str, 
+    file_index: dict, 
+    unfound_targets: set
+) -> bool:
+    """
+    Reads a file, updates the targetPath in its YAML, and writes it back.
+    Returns True if the file was modified, False otherwise.
+    """
+    try:
+        original_body_content, yaml_data, _ = read_markdown_with_frontmatter(file_abs_path)
+    except Exception as e:
+        print(f"[ERROR] Could not read file {file_abs_path}: {e}")
+        return False
+
+    if not yaml_data or AI_JUDGED_CANDIDATES_FM_KEY not in yaml_data:
+        return False # No relevant YAML to update
+
+    was_modified = False
+    candidates = yaml_data.get(AI_JUDGED_CANDIDATES_FM_KEY, [])
+    if not isinstance(candidates, list):
+        return False # Skip if the structure is not a list as expected
+
+    for candidate in candidates:
+        if isinstance(candidate, dict) and 'targetPath' in candidate:
+            old_path_str = candidate['targetPath']
+            target_filename = os.path.basename(old_path_str)
+            
+            # Look up the new path in our index
+            if target_filename in file_index:
+                new_path = file_index[target_filename]
+                if old_path_str != new_path:
+                    candidate['targetPath'] = new_path
+                    was_modified = True
+            else:
+                # If not found in the index, log it for the final report
+                unfound_targets.add(target_filename)
+    
+    if was_modified:
+        try:
+            # Use the existing write_markdown_with_frontmatter
+            write_markdown_with_frontmatter(file_abs_path, yaml_data, original_body_content)
+            return True
+        except Exception as e:
+            print(f"[ERROR] Failed to write updated YAML to {file_abs_path}: {e}")
+            return False
+            
+    return False
+
+def update_all_target_paths_in_vault(
+    project_root_abs: str,
+    excluded_folders: list = None,
+    excluded_files_patterns: list = None
+):
+    """
+    Orchestrates the process of updating target paths in YAML frontmatter across the vault.
+    """
+    print(f"\n===== 启动 YAML 路径更新 =====")
+    print(f"- 项目根路径: {project_root_abs}")
+
+    # 1. Build the index of all files and their new relative paths
+    file_index = build_file_index(project_root_abs, excluded_folders, excluded_files_patterns)
+
+    # 2. Iterate through all files and update them
+    updated_file_count = 0
+    unfound_targets = set()
+    
+    all_md_files_relative = list_markdown_files(project_root_abs, project_root_abs, excluded_folders, excluded_files_patterns)
+    total_files = len(all_md_files_relative)
+    
+    print(f"\n[INFO] Starting to process {total_files} files for path updates...")
+
+    for i, file_rel_path in enumerate(all_md_files_relative):
+        file_abs_path = os.path.join(project_root_abs, file_rel_path)
+        print(f"  -> Processing ({i+1}/{total_files}): {file_rel_path}", end='\r')
+        if update_target_paths_in_frontmatter_for_single_file(file_abs_path, file_index, unfound_targets):
+            updated_file_count += 1
+    
+    print("\n" + "="*50)
+    print("        路径更新报告")
+    print("="*50)
+    print(f"总文件数: {total_files}")
+    print(f"YAML 路径已更新的文件数: {updated_file_count}")
+    print("-" * 50)
+    
+    if unfound_targets:
+        print(f"在 YAML 中引用但未在仓库中找到的目标文件 ({len(unfound_targets)}):")
+        for filename in sorted(list(unfound_targets)):
+            print(f"  - {filename}")
+    else:
+        print("所有引用的目标路径均已成功找到并更新。")
+
+    print("\n[INFO] 路径更新脚本完成。")
 
 
 # --- Default constants for argparse ---
@@ -664,19 +1098,25 @@ def main():
     parser = argparse.ArgumentParser(description="Jina AI 处理工具 - 处理笔记内容并提取嵌入。")
     parser.add_argument('--project_root', type=str, required=True, help='项目根目录的绝对路径')
     parser.add_argument('--output_dir', type=str, default='.Jina-AI-Linker-Output', help='输出文件的目录路径（相对于项目根目录）')
-    parser.add_argument('--jina_api_key', type=str, required=True, help='Jina API 密钥')
-    parser.add_argument('--deepseek_api_key', type=str, default='', help='DeepSeek API 密钥（用于 AI 打分，如不提供则跳过 AI 打分）')
+    parser.add_argument('--jina_api_key', type=str, default='', help='Jina API 密钥') # Made optional for path update mode
+    # AI 提供商参数
+    parser.add_argument('--ai_provider', type=str, default='', help='AI 提供商 (deepseek, openai, claude, gemini, custom)')
+    parser.add_argument('--ai_api_url', type=str, default='', help='AI API URL')
+    parser.add_argument('--ai_api_key', type=str, default='', help='AI API 密钥（用于 AI 打分，如不提供则跳过 AI 打分）')
+    parser.add_argument('--ai_model_name', type=str, default='', help='AI 模型名称')
+    
+    # 其他参数
     parser.add_argument('--similarity_threshold', type=float, default=0.7, help='相似度阈值（0-1之间）')
     parser.add_argument('--scan_target_folders', nargs='*', default=[], help='要扫描的文件夹（逗号分隔，相对于项目根目录）')
     parser.add_argument('--excluded_folders', nargs='*', default=[], help='要排除的文件夹列表')
     parser.add_argument('--excluded_files_patterns', nargs='*', default=[], help='要排除的文件名模式列表')
     parser.add_argument('--jina_model_name', type=str, default='jina-embeddings-v3', help='Jina 模型名称')
     parser.add_argument('--max_chars_for_jina', type=int, default=8000, help='传递给 Jina 的最大字符数')
-    parser.add_argument('--deepseek_model_name', type=str, default='deepseek-chat', help='DeepSeek 模型名称')
     parser.add_argument('--max_content_length_for_ai', type=int, default=5000, help='传递给 AI 评分的每篇笔记的最大内容长度（字符）')
     parser.add_argument('--max_candidates_per_source_for_ai_scoring', type=int, default=20, help='每个源笔记发送给 AI 评分的最大候选链接数')
     parser.add_argument('--ai_scoring_mode', type=str, choices=['force', 'smart', 'skip'], default='smart', help='AI 评分模式：force=强制重新评分所有候选，smart=只评分未评分的，skip=跳过 AI 评分')
     parser.add_argument('--hash_boundary_marker', type=str, default='<!-- HASH_BOUNDARY -->', help='用于标记哈希计算边界的标记')
+    parser.add_argument('--update_paths_only', action='store_true', help='只执行 YAML 路径更新功能，不执行其他处理。') # New argument
     
     args = parser.parse_args()
     
@@ -688,6 +1128,19 @@ def main():
     
     # 确保输出目录存在
     os.makedirs(output_dir_abs, exist_ok=True)
+    
+    # If only updating paths, execute that function and exit
+    if args.update_paths_only:
+        update_all_target_paths_in_vault(
+            project_root_abs,
+            excluded_folders=args.excluded_folders,
+            excluded_files_patterns=args.excluded_files_patterns
+        )
+        end_time = time.time()
+        print(f"\n总耗时: {end_time - start_time:.2f} 秒")
+        return
+
+    # Default processing flow continues below if not update_paths_only
     
     # 默认的嵌入和候选文件路径
     embeddings_file_path = os.path.join(output_dir_abs, "jina_embeddings.json")
@@ -716,12 +1169,13 @@ def main():
     print(f"- 相似度阈值: {args.similarity_threshold}")
     if args.max_candidates_per_source_for_ai_scoring > 0:
         print(f"- 每源笔记的最大AI评分候选数: {args.max_candidates_per_source_for_ai_scoring}")
-    if args.deepseek_api_key:
+    if args.ai_api_key:
         print(f"- AI评分模式: {args.ai_scoring_mode}")
-        print(f"- DeepSeek模型: {args.deepseek_model_name}")
+        print(f"- AI提供商: {args.ai_provider}")
+        print(f"- AI模型: {args.ai_model_name}")
         print(f"- AI评分内容最大长度: {args.max_content_length_for_ai}")
     else:
-        print("- AI评分: 未提供 DeepSeek API 密钥，跳过 AI 评分")
+        print("- AI评分: 未提供 AI API 密钥，跳过 AI 评分")
     
     # 扫描并列出符合条件的 markdown 文件
     print(f"\n步骤 1：扫描 Markdown 文件...")
@@ -787,27 +1241,29 @@ def main():
         print("  没有找到符合相似度阈值的候选链接对。")
     
     # 步骤 4: AI 对候选链接进行智能打分评分
-    if (args.deepseek_api_key and args.ai_scoring_mode != 'skip' and 
+    if (args.ai_api_key and args.ai_scoring_mode != 'skip' and 
         args.max_candidates_per_source_for_ai_scoring > 0 and len(candidate_pairs) > 0):
         
-        print(f"\n步骤 4：使用 DeepSeek AI 对候选链接进行智能评分...")
+        print(f"\n步骤 4：使用 {args.ai_provider} AI 对候选链接进行智能评分...")
         
         force_rescore = args.ai_scoring_mode == 'force'
         score_candidates_and_update_frontmatter(
             candidate_pairs,
             project_root_abs,
-            deepseek_api_key_to_use=args.deepseek_api_key, 
-            deepseek_model_name_to_use=args.deepseek_model_name,
+            ai_provider=args.ai_provider,
+            ai_api_url=args.ai_api_url,
+            ai_api_key=args.ai_api_key,
+            ai_model_name=args.ai_model_name,
             max_content_length_for_ai_to_use=args.max_content_length_for_ai,
             max_candidates_per_source_for_ai_scoring_to_use=args.max_candidates_per_source_for_ai_scoring, 
             hash_boundary_marker_to_use=args.hash_boundary_marker,
             force_rescore=force_rescore
         )
     else:
-        if args.deepseek_api_key:
+        if args.ai_api_key:
             print(f"\n步骤 4：跳过 AI 评分 (评分模式: {args.ai_scoring_mode})")
         else:
-            print(f"\n步骤 4：跳过 AI 评分 (未提供 DeepSeek API 密钥)")
+            print(f"\n步骤 4：跳过 AI 评分 (未提供 {args.ai_provider or 'AI'} API 密钥)")
     
     # 打印总结信息
     end_time = time.time()
