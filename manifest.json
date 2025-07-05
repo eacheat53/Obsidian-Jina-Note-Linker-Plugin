@@ -1,10 +1,9 @@
 {
     "id": "jina-obsidian-linker",
     "name": "Jina AI Note Linker",
-    "version": "0.1.0",
-    "minAppVersion": "0.15.0",
-    "description": "Uses Jina AI and DeepSeek AI to process notes, find similarities, and suggest links by running a Python script.",
-    "author": "Your Name",
-    "authorUrl": "https://your-website.com",
+    "version": "1.0.0",
+    "description": "Uses Jina AI and AI to process notes, find similarities, and suggest links by running script.",
+    "author": "Eacheat53",
+    "authorUrl": "https://github.com/eacheat53",
     "isDesktopOnly": true
 }

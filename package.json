@@ -1,7 +1,7 @@
 {
     "name": "jina-obsidian-linker",
     "version": "1.0.0",
-    "description": "Obsidian plugin to link notes using Jina AI and DeepSeek AI.",
+    "description": "Uses Jina AI and AI to process notes, find similarities, and suggest links by running script.",
     "main": "main.js",
     "scripts": {
       "dev": "node esbuild.config.mjs",
@@ -15,8 +15,8 @@
       "ai",
       "linking"
     ],
-    "author": "Your Name",
-    "license": "MIT",
+    "author": "Eacheat53",
+    "license": "GPL-3.0",
     "devDependencies": {
       "@types/node": "^16.11.6",
       "obsidian": "latest",

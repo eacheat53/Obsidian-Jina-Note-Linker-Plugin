@@ -12,13 +12,11 @@ import fnmatch
 import yaml # 用于解析 frontmatter
 import sys
 import io
-from pathlib import Path # For path operations
+from pathlib import Path # 用于路径操作
 
-# Ensure stdout and stderr use UTF-8 encoding
+# 确保标准输出和标准错误使用 UTF-8 编码
 if sys.stdout.encoding != 'utf-8':
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-if sys.stderr.encoding != 'utf-8':
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
 # --- 嵌入处理配置常量 (只保留脚本内部固定或真正意义上的常量) ---
 JINA_API_URL = "https://api.jina.ai/v1/embeddings" 
@@ -52,9 +50,7 @@ DEFAULT_AI_CONFIGS = {
     }
 }
 
-# --- Frontmatter Key 常量 ---
-# 此键名现在由脚本内部固定，应与 TypeScript 插件中的常量保持一致
-AI_JUDGED_CANDIDATES_FM_KEY = "ai_judged_candidates"
+
 
 # --- 哈希边界标记常量 ---
 # 此标记用于界定笔记内容哈希计算的边界，此边界后的内容不参与哈希计算
@@ -74,12 +70,27 @@ def read_markdown_with_frontmatter(file_path: str) -> tuple[str, dict, str]:
     frontmatter_dict = {}
     body_content = full_content
 
-    trimmed_content = full_content.lstrip()
-    if trimmed_content.startswith("---"):
-        end_frontmatter_index = trimmed_content.find("---", 3)
-        if end_frontmatter_index != -1:
-            frontmatter_block = trimmed_content[3:end_frontmatter_index].strip()
-            body_content = trimmed_content[end_frontmatter_index + 3:].lstrip()
+    # 检查是否以frontmatter开头
+    if full_content.startswith("---"):
+        # 查找frontmatter结束标记
+        lines = full_content.split('\n')
+        frontmatter_end_line = -1
+        
+        # 从第二行开始查找结束的 ---
+        for i in range(1, len(lines)):
+            if lines[i].strip() == "---":
+                frontmatter_end_line = i
+                break
+        
+        if frontmatter_end_line != -1:
+            # 提取frontmatter内容（不包括开始和结束的 --- 行）
+            frontmatter_lines = lines[1:frontmatter_end_line]
+            frontmatter_block = '\n'.join(frontmatter_lines)
+            
+            # 提取body内容（从frontmatter结束行的下一行开始）
+            body_lines = lines[frontmatter_end_line + 1:]
+            body_content = '\n'.join(body_lines)
+            
             frontmatter_str = frontmatter_block 
             try:
                 frontmatter_dict = yaml.safe_load(frontmatter_block) or {}
@@ -89,15 +100,13 @@ def read_markdown_with_frontmatter(file_path: str) -> tuple[str, dict, str]:
     
     return body_content, frontmatter_dict, frontmatter_str
 
+
 def write_markdown_with_frontmatter(file_path: str, frontmatter: dict, body: str):
     """
     将 frontmatter 和正文重新组合并写入 Markdown 文件。
     """
     output_content = ""
     if frontmatter:
-        # Use ruamel.yaml for better round-trip preservation if needed, but for simple dump, pyyaml is fine.
-        # For consistency with 1.py, let's use ruamel.yaml's dump if possible, but it's not imported globally.
-        # Sticking to pyyaml's dump for now as it's already imported.
         frontmatter_dump = yaml.dump(frontmatter, allow_unicode=True, default_flow_style=False, sort_keys=False)
         output_content = f"---\n{frontmatter_dump.strip()}\n---\n"
     
@@ -173,8 +182,10 @@ def list_markdown_files(scan_directory_abs: str, project_root_abs: str, excluded
 
 def get_jina_embedding(text: str, 
                        jina_api_key_to_use: str, 
-                       jina_model_name_to_use: str) -> list | None: # Added params
-    """调用 Jina API 获取文本的嵌入向量"""
+                       jina_model_name_to_use: str, 
+                       max_retries: int = 3, 
+                       initial_delay: float = 1.0) -> list | None:
+    """调用 Jina API 获取文本的嵌入向量，包含重试机制"""
     if not jina_api_key_to_use: 
         print("错误：Jina API Key 未提供。")
         return None
@@ -193,25 +204,39 @@ def get_jina_embedding(text: str,
         "input": [text],
         "model": jina_model_name_to_use
     }
-    try:
-        time.sleep(JINA_API_REQUEST_DELAY) # Still uses global constant, could be made a param
-        response = requests.post(JINA_API_URL, headers=headers, data=json.dumps(data), timeout=30)
-        response.raise_for_status()
-        
-        result = response.json()
-        if result.get("data") and len(result["data"]) > 0 and result["data"][0].get("embedding"):
-            return result["data"][0]["embedding"]
-        else:
-            print(f"错误：Jina API 响应格式不正确。响应: {result}")
-            return None
-    except requests.exceptions.RequestException as e:
-        print(f"错误：调用 Jina API 失败: {e}")
-        if hasattr(e, 'response') and e.response is not None:
-            print(f"响应状态码: {e.response.status_code}, 响应内容: {e.response.text[:500]}...")
-        return None
-    except Exception as e:
-        print(f"处理 Jina API 响应时发生未知错误: {e}")
-        return None
+    
+    delay = initial_delay
+    for attempt in range(max_retries):
+        try:
+            time.sleep(JINA_API_REQUEST_DELAY)
+            response = requests.post(JINA_API_URL, headers=headers, data=json.dumps(data), timeout=30)
+            response.raise_for_status()
+            
+            result = response.json()
+            if result.get("data") and len(result["data"]) > 0 and result["data"][0].get("embedding"):
+                return result["data"][0]["embedding"]
+            else:
+                print(f"错误：Jina API 响应格式不正确。响应: {result}")
+                return None # 格式错误，不重试
+
+        except requests.exceptions.RequestException as e:
+            print(f"错误：调用 Jina API 失败 (尝试 {attempt + 1}/{max_retries}): {e}")
+            if hasattr(e, 'response') and e.response is not None:
+                print(f"响应状态码: {e.response.status_code}, 响应内容: {e.response.text[:500]}...")
+                # 如果是客户端错误（如4xx），则不重试
+                if 400 <= e.response.status_code < 500:
+                    return None
+            
+            # 等待后重试
+            time.sleep(delay)
+            delay *= 2 # 指数退避
+
+        except Exception as e:
+            print(f"处理 Jina API 响应时发生未知错误: {e}")
+            return None # 未知错误，不重试
+            
+    print(f"错误：达到最大重试次数 {max_retries} 后，Jina API 调用仍然失败。")
+    return None
 
 class EmbeddingEncoder(json.JSONEncoder):
     def iterencode(self, obj, _one_shot=False):
@@ -234,7 +259,7 @@ def process_and_embed_notes(
     project_root_abs: str,
     files_relative_to_project_root: list,
     embeddings_file_path: str,
-    # --- Added parameters ---
+    # --- 添加的参数 ---
     jina_api_key_to_use: str,
     jina_model_name_to_use: str,
     max_chars_for_jina_to_use: int
@@ -255,7 +280,7 @@ def process_and_embed_notes(
                     if not isinstance(metadata_from_json, dict):
                         metadata_from_json = {}
                 else:
-                    print(f"警告：JSON文件 {embeddings_file_path} 顶层不是字典。") # Clearer warning
+                    print(f"警告：JSON文件 {embeddings_file_path} 顶层不是字典。")
         except Exception as e:
             print(f"警告：加载嵌入数据文件 {embeddings_file_path} 失败: {e}。")
 
@@ -339,12 +364,13 @@ def process_and_embed_notes(
 
         files_data_from_json[file_rel_path] = {
             "embedding": final_embedding_for_json,
-            "hash": current_content_hash
+            "hash": current_content_hash,
+            "processed_content": text_for_processing  # 保存已处理的内容供AI评分使用
         }
 
     final_metadata = {
         "generated_at_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-        "jina_model_name": jina_model_name_to_use, # Use passed model name
+        "jina_model_name": jina_model_name_to_use, # 使用传入的模型名称
         "script_version": "2.0_plugin_compatible" 
     }
     
@@ -375,11 +401,11 @@ def cosine_similarity(vec1: list, vec2: list) -> float:
         return 0.0
     return dot_product / (magnitude1 * magnitude2)
 
-def generate_candidate_pairs(embeddings_data_input: dict, similarity_threshold: float) -> list: # candidates_file_path removed
+def generate_candidate_pairs(embeddings_data_input: dict, similarity_threshold: float) -> list: # candidates_file_path 已移除
     actual_embeddings_data = {}
-    if isinstance(embeddings_data_input, dict) and "files" in embeddings_data_input: # Check new structure
+    if isinstance(embeddings_data_input, dict) and "files" in embeddings_data_input: # 检查新结构
         actual_embeddings_data = embeddings_data_input["files"]
-    elif isinstance(embeddings_data_input, dict): # Compatibility for old structure
+    elif isinstance(embeddings_data_input, dict): # 兼容旧结构
         actual_embeddings_data = {k:v for k,v in embeddings_data_input.items() if k != "_metadata"}
     else:
         print("错误：传入 generate_candidate_pairs 的 embeddings_data_input 格式不正确。")
@@ -446,17 +472,18 @@ def generate_candidate_pairs(embeddings_data_input: dict, similarity_threshold: 
 # REMOVED: get_deepseek_api_key function. Key is passed directly.
 
 def call_ai_api_for_pair_relevance(
-    source_body_content: str, 
-    target_body_content: str, 
+    source_processed_content: str,  # 已经处理过的内容，不需要再次提取
+    target_processed_content: str,  # 已经处理过的内容，不需要再次提取
     source_file_path: str,
     target_file_path: str, 
     api_key: str,
-    # --- AI provider parameters ---
+    # --- AI 提供商参数 ---
     ai_provider: str,
     ai_api_url: str,
     ai_model_name: str,
     max_content_length_for_ai_to_use: int,
-    hash_boundary_marker_to_use: str
+    max_retries: int = 3,
+    initial_delay: float = 1.0
 ) -> dict:
     if not api_key:
         print(f"错误：{ai_provider} API Key 未配置。无法为 {source_file_path} -> {target_file_path} 打分。")
@@ -465,19 +492,9 @@ def call_ai_api_for_pair_relevance(
     source_file_name = os.path.basename(source_file_path)
     target_file_name = os.path.basename(target_file_path)
 
-    processed_source_body = extract_content_for_hashing(source_body_content)
-    processed_target_body = extract_content_for_hashing(target_body_content)
-
-    if processed_source_body is None or processed_target_body is None:
-        missing_marker_info = []
-        if processed_source_body is None: missing_marker_info.append(f"源笔记({source_file_path})")
-        if processed_target_body is None: missing_marker_info.append(f"目标笔记({target_file_path})")
-        error_msg = f"Missing HASH_BOUNDARY_MARKER ('{hash_boundary_marker_to_use}') in {', '.join(missing_marker_info)}"
-        print(f"{ai_provider} API 跳过: {error_msg}")
-        return {"ai_score": -1, "error": error_msg}
-
-    source_excerpt = processed_source_body[:max_content_length_for_ai_to_use]
-    target_excerpt = processed_target_body[:max_content_length_for_ai_to_use]
+    # 直接使用已经处理过的内容，不需要再次检查哈希边界标记
+    source_excerpt = source_processed_content[:max_content_length_for_ai_to_use]
+    target_excerpt = target_processed_content[:max_content_length_for_ai_to_use]
 
     # 构建请求体和头部，根据不同AI提供商调整
     request_body, headers = build_ai_request(
@@ -486,38 +503,53 @@ def call_ai_api_for_pair_relevance(
     )
 
     print(f"  AI打分 (调用{ai_provider} API): {source_file_path} -> {target_file_path}")
-    try:
-        # 对于Gemini，需要在URL中添加API密钥
-        if ai_provider == 'gemini':
-            # 构建完整的Gemini API URL
-            model_path = ai_model_name if ai_model_name else 'gemini-1.5-flash'
-            full_url = f"{ai_api_url}/{model_path}:generateContent?key={api_key}"
-        else:
-            full_url = ai_api_url
+    
+    delay = initial_delay
+    for attempt in range(max_retries):
+        try:
+            # 对于Gemini，需要在URL中添加API密钥
+            if ai_provider == 'gemini':
+                # 构建完整的Gemini API URL
+                model_path = ai_model_name if ai_model_name else 'gemini-1.5-flash'
+                full_url = f"{ai_api_url}/{model_path}:generateContent?key={api_key}"
+            else:
+                full_url = ai_api_url
+                
+            # 延迟由调用者处理 (score_candidates_and_update_frontmatter)
+            response = requests.post(full_url, headers=headers, json=request_body, timeout=45)
             
-        # Delay is handled by the caller (score_candidates_and_update_frontmatter)
-        response = requests.post(full_url, headers=headers, json=request_body, timeout=45)
-        
-        if not response.ok:
-            error_message = f"{ai_provider} API 失败 {source_file_path}->{target_file_path}: HTTP {response.status_code}"
-            try: error_message += f" - {response.json()}"
-            except json.JSONDecodeError: error_message += f" - {response.text[:200]}"
-            print(error_message)
-            return {"ai_score": -1, "error": f"API Error: HTTP {response.status_code}"}
+            if not response.ok:
+                error_message = f"{ai_provider} API 失败 {source_file_path}->{target_file_path}: HTTP {response.status_code}"
+                try: error_message += f" - {response.json()}"
+                except json.JSONDecodeError: error_message += f" - {response.text[:200]}"
+                print(error_message)
+                # 如果是客户端错误（如4xx），则不重试
+                if 400 <= response.status_code < 500:
+                    return {"ai_score": -1, "error": f"API Error: HTTP {response.status_code}"}
+                # 对于服务器错误，进行重试
+                raise requests.exceptions.RequestException(f"Server error: {response.status_code}")
 
-        # 解析响应，根据不同AI提供商调整
-        score = parse_ai_response(response, ai_provider, source_file_path, target_file_path)
-        if score is not None:
-            return {"ai_score": score}
-        else:
-            return {"ai_score": -1, "error": "Failed to parse AI response"}
+            # 解析响应，根据不同AI提供商调整
+            score = parse_ai_response(response, ai_provider, source_file_path, target_file_path)
+            if score is not None:
+                return {"ai_score": score}
+            else:
+                return {"ai_score": -1, "error": "Failed to parse AI response"} # 解析失败，不重试
+                
+        except requests.exceptions.Timeout:
+            print(f"{ai_provider} API 超时 (尝试 {attempt + 1}/{max_retries}) {source_file_path}->{target_file_path}")
+            time.sleep(delay)
+            delay *= 2
+        except requests.exceptions.RequestException as e:
+            print(f"{ai_provider} API 请求失败 (尝试 {attempt + 1}/{max_retries}): {e}")
+            time.sleep(delay)
+            delay *= 2
+        except Exception as e_unknown: # 捕获更广泛的异常
+            print(f"{ai_provider} API 未知错误 {source_file_path}->{target_file_path}: {e_unknown}")
+            return {"ai_score": -1, "error": f"Unknown API call error: {e_unknown}"} # 未知错误，不重试
             
-    except requests.exceptions.Timeout:
-        print(f"{ai_provider} API 超时 {source_file_path}->{target_file_path}")
-        return {"ai_score": -1, "error": "API call timed out"}
-    except Exception as e_unknown: # Catch broader exceptions
-        print(f"{ai_provider} API 未知错误 {source_file_path}->{target_file_path}: {e_unknown}")
-        return {"ai_score": -1, "error": f"Unknown API call error: {e_unknown}"}
+    print(f"错误：达到最大重试次数 {max_retries} 后，AI API 调用仍然失败。")
+    return {"ai_score": -1, "error": "API call failed after multiple retries"}
 
 
 def build_ai_request(ai_provider: str, model_name: str, api_key: str, 
@@ -658,6 +690,10 @@ def score_candidates_and_update_frontmatter(
     hash_boundary_marker_to_use: str,
     force_rescore: bool
 ):
+    """
+    注意：此函数已删除AI评分写入YAML frontmatter功能
+    现在只进行AI评分并保存到独立JSON文件
+    """
     if not ai_api_key: # This check is now primary
         print(f"错误：{ai_provider} API Key 未提供，跳过 AI 打分流程。")
         return
@@ -676,6 +712,18 @@ def score_candidates_and_update_frontmatter(
     
     existing_ai_scores = load_ai_scores_from_json(ai_scores_file_path)
     ai_score_cache.update(existing_ai_scores)  # 预填充缓存
+
+    # 优化：一次性加载所有嵌入数据
+    embeddings_data_content = {}
+    embeddings_file_path = os.path.join(project_root_abs, ".Jina-AI-Linker-Output", "jina_embeddings.json")
+    if os.path.exists(embeddings_file_path):
+        try:
+            with open(embeddings_file_path, 'r', encoding='utf-8') as f:
+                embeddings_data_content = json.load(f).get("files", {})
+            print(f"✅ 成功加载嵌入数据用于AI评分。")
+        except Exception as e:
+            print(f"⚠️  读取嵌入数据文件 {embeddings_file_path} 失败: {e}，将回退到逐个文件读取。")
+            embeddings_data_content = {}
     
     # 第一步：识别唯一的关系对（用于AI打分）
     for pair in candidate_pairs_list:
@@ -720,15 +768,22 @@ def score_candidates_and_update_frontmatter(
             continue
             
         try:
-            source_body, _, _ = read_markdown_with_frontmatter(source_abs_path)
-            target_body, _, _ = read_markdown_with_frontmatter(target_abs_path)
-            
-            clean_source_body = extract_content_for_hashing(source_body)
-            clean_target_body = extract_content_for_hashing(target_body)
-            
-            if clean_source_body is None or clean_target_body is None:
-                print(f"    警告：缺少哈希边界标记，跳过AI打分")
-                continue
+            # 尝试从已加载的嵌入数据中获取内容
+            clean_source_body = embeddings_data_content.get(source_path, {}).get('processed_content')
+            clean_target_body = embeddings_data_content.get(target_path, {}).get('processed_content')
+
+            if not clean_source_body or not clean_target_body:
+                # 如果无法从嵌入数据获取内容，回退到文件读取
+                print(f"    ⚠️  无法从缓存中获取内容，将从文件读取: {source_path} 或 {target_path}")
+                source_body, _, _ = read_markdown_with_frontmatter(source_abs_path)
+                target_body, _, _ = read_markdown_with_frontmatter(target_abs_path)
+                
+                clean_source_body = extract_content_for_hashing(source_body)
+                clean_target_body = extract_content_for_hashing(target_body)
+                
+                if clean_source_body is None or clean_target_body is None:
+                    print(f"    ❌ 缺少哈希边界标记，跳过AI打分")
+                    continue
                 
             # 执行AI打分（只调用一次API）
             time.sleep(AI_API_REQUEST_DELAY_SECONDS)
@@ -742,8 +797,7 @@ def score_candidates_and_update_frontmatter(
                 ai_provider,
                 ai_api_url,
                 ai_model_name,
-                max_content_length_for_ai_to_use,
-                hash_boundary_marker_to_use
+                max_content_length_for_ai_to_use
             )
             
             if "ai_score" in ai_result and ai_result["ai_score"] != -1:
@@ -756,122 +810,14 @@ def score_candidates_and_update_frontmatter(
         except Exception as e:
             print(f"    AI打分异常: {e}")
     
-    # 第三步：将AI评分结果写入所有相关文件的frontmatter
-    print(f"\n开始将AI评分结果写入文件frontmatter...")
-    candidates_by_source = {}
-    for pair in candidate_pairs_list:
-        source_path = pair["source_path"]
-        candidates_by_source.setdefault(source_path, []).append(pair)
-
-    total_pairs_for_ai_consideration = 0
-    limited_candidates_by_source = {}
-    for source_path, pairs in candidates_by_source.items():
-        sorted_pairs = sorted(pairs, key=lambda p: p.get("jina_similarity", 0.0), reverse=True)
-        limited_pairs = sorted_pairs[:max_candidates_per_source_for_ai_scoring_to_use] # Use param
-        limited_candidates_by_source[source_path] = limited_pairs
-        total_pairs_for_ai_consideration += len(limited_pairs)
-
-    print(f"\n开始对约 {total_pairs_for_ai_consideration} 个候选链接对进行 AI 打分...")
-    processed_ai_pairs_this_run = 0
-
-    for source_rel_path, pairs_for_source in limited_candidates_by_source.items():
-        source_abs_path = os.path.join(project_root_abs, source_rel_path)
-        current_source_pairs_to_process = len(pairs_for_source)
-        pairs_processed_for_current_source = 0
-
-        if not os.path.exists(source_abs_path):
-            print(f"  警告：源文件 {source_rel_path} 不存在，跳过其 AI 打分。")
-            processed_ai_pairs_this_run += current_source_pairs_to_process
-            continue
-
-        try:
-            source_body_for_fm, source_fm_dict, _ = read_markdown_with_frontmatter(source_abs_path)
-            if AI_JUDGED_CANDIDATES_FM_KEY not in source_fm_dict or \
-               not isinstance(source_fm_dict[AI_JUDGED_CANDIDATES_FM_KEY], list):
-                source_fm_dict[AI_JUDGED_CANDIDATES_FM_KEY] = []
-            
-            existing_judged_targets_info = {
-                item.get("targetPath"): item 
-                for item in source_fm_dict[AI_JUDGED_CANDIDATES_FM_KEY] 
-                if isinstance(item, dict) and "targetPath" in item
-            }
-            
-            made_change_to_this_file = False
-            src_content_body_for_ai_analysis, _, _ = read_markdown_with_frontmatter(source_abs_path) # Read full body
-            clean_src_body_for_ai = extract_content_for_hashing(src_content_body_for_ai_analysis)
-
-            if clean_src_body_for_ai is None:
-                print(f"  警告：源文件 {source_rel_path} 缺少哈希边界 \'{HASH_BOUNDARY_MARKER}\'，跳过 AI 打分。")
-                processed_ai_pairs_this_run += current_source_pairs_to_process
-                continue
-            if not clean_src_body_for_ai.strip():
-                print(f"  警告：源文件 {source_rel_path} 哈希边界前内容为空，跳过 AI 打分。")
-                processed_ai_pairs_this_run += current_source_pairs_to_process
-                continue
-
-            for pair_info in pairs_for_source:
-                processed_ai_pairs_this_run += 1
-                pairs_processed_for_current_source +=1
-                target_rel_path = pair_info["target_path"]
-                target_abs_path = os.path.join(project_root_abs, target_rel_path)
-
-                print(f"  更新frontmatter ({processed_ai_pairs_this_run}/{total_pairs_for_ai_consideration} - 源内 {pairs_processed_for_current_source}/{current_source_pairs_to_process}): {source_rel_path} -> {target_rel_path}")
-
-                # 🔥 使用缓存的AI评分结果
-                pair_id = pair_info.get("pair_id")
-                ai_score_value = None
-                
-                if pair_id and pair_id in ai_score_cache:
-                    # 使用缓存的AI评分
-                    ai_score_value = ai_score_cache[pair_id]
-                    print(f"    使用缓存的AI评分: {ai_score_value}/10")
-                elif not force_rescore and target_rel_path in existing_judged_targets_info:
-                    # 使用已存在的AI评分
-                    existing_entry = existing_judged_targets_info[target_rel_path]
-                    if isinstance(existing_entry, dict) and "aiScore" in existing_entry:
-                        ai_score_value = existing_entry["aiScore"]
-                        print(f"    使用已存在的AI评分: {ai_score_value}/10")
-                    else:
-                        print(f"    AI打分已存在但格式无效，跳过。")
-                        continue
-                else:
-                    print(f"    无可用的AI评分，跳过。")
-                    continue
-
-                if ai_score_value is not None:
-                    new_ai_entry = {
-                        "targetPath": target_rel_path,      
-                        "aiScore": ai_score_value,        
-                        "jinaScore": round(pair_info["jina_similarity"], 6) 
-                    }
-                    # Update or add, ensuring targetPath uniqueness
-                    source_fm_dict[AI_JUDGED_CANDIDATES_FM_KEY] = [
-                        item for item in source_fm_dict[AI_JUDGED_CANDIDATES_FM_KEY]
-                        if not (isinstance(item, dict) and item.get("targetPath") == target_rel_path) 
-                    ]
-                    source_fm_dict[AI_JUDGED_CANDIDATES_FM_KEY].append(new_ai_entry)
-                    made_change_to_this_file = True
-                    print(f"    AI评分 ({ai_score_value}/10) 已更新到 {source_rel_path} frontmatter")
-
-            if made_change_to_this_file:
-                source_fm_dict[AI_JUDGED_CANDIDATES_FM_KEY].sort(
-                    key=lambda x: (x.get("aiScore", -1), x.get("jinaScore", 0.0)), 
-                    reverse=True
-                )
-                try:
-                    write_markdown_with_frontmatter(source_abs_path, source_fm_dict, source_body_for_fm)
-                    updated_files_count +=1
-                except Exception as e_write:
-                    print(f"  错误：写入 AI 打分结果到 {source_rel_path} 失败: {e_write}")
-        
-        except Exception as e_outer:
-            print(f"  处理源文件 {source_rel_path} AI 打分时发生外部错误: {e_outer}")
-
-    # 🔥 新增：保存AI评分到独立JSON文件
+    # 第三步：保存AI评分结果到独立JSON文件（不再写入frontmatter）
+    print(f"\n保存AI评分结果到独立JSON文件...")
+    
+    # 保存AI评分到独立JSON文件
     save_ai_scores_to_json(ai_score_cache, unique_pairs_for_ai, ai_scores_file_path)
     
-    print(f"\nAI 打分及 Frontmatter 更新完成。更新了 {updated_files_count} 个源文件。处理了 {processed_ai_pairs_this_run}/{total_pairs_for_ai_consideration} 对候选。")
-    print(f"AI评分数据已保存到: {ai_scores_file_path}")
+    print(f"\nAI 打分完成。AI评分数据已保存到: {ai_scores_file_path}")
+    print(f"注意：AI评分不再写入文件frontmatter，仅保存在独立的JSON文件中。")
 
 def save_ai_scores_to_json(ai_score_cache: dict, unique_pairs_for_ai: dict, ai_scores_file_path: str):
     """
@@ -978,21 +924,7 @@ def load_ai_scores_from_json(ai_scores_file_path: str) -> dict:
     
     return ai_scores
 
-def build_file_index(vault_root_abs: str, excluded_folders: list = None, excluded_files_patterns: list = None) -> dict[str, str]:
-    """
-    Recursively scans the vault and creates a map of
-    filename -> new relative path (using forward slashes).
-    """
-    print(f"[INFO] Building file index for vault at: {vault_root_abs}...")
-    index = {}
-    
-    all_md_files = list_markdown_files(vault_root_abs, vault_root_abs, excluded_folders, excluded_files_patterns)
-    
-    for file_rel_path in all_md_files:
-        file_name = os.path.basename(file_rel_path)
-        index[file_name] = file_rel_path
-    print(f"[INFO] Index created with {len(index)} files.")
-    return index
+# 已删除 build_file_index 函数，因为YAML路径更新功能已被移除
 
 def update_target_paths_in_frontmatter_for_single_file(
     file_abs_path: str, 
@@ -1000,47 +932,8 @@ def update_target_paths_in_frontmatter_for_single_file(
     unfound_targets: set
 ) -> bool:
     """
-    Reads a file, updates the targetPath in its YAML, and writes it back.
-    Returns True if the file was modified, False otherwise.
+    此函数已删除，因为AI评分不再写入YAML frontmatter
     """
-    try:
-        original_body_content, yaml_data, _ = read_markdown_with_frontmatter(file_abs_path)
-    except Exception as e:
-        print(f"[ERROR] Could not read file {file_abs_path}: {e}")
-        return False
-
-    if not yaml_data or AI_JUDGED_CANDIDATES_FM_KEY not in yaml_data:
-        return False # No relevant YAML to update
-
-    was_modified = False
-    candidates = yaml_data.get(AI_JUDGED_CANDIDATES_FM_KEY, [])
-    if not isinstance(candidates, list):
-        return False # Skip if the structure is not a list as expected
-
-    for candidate in candidates:
-        if isinstance(candidate, dict) and 'targetPath' in candidate:
-            old_path_str = candidate['targetPath']
-            target_filename = os.path.basename(old_path_str)
-            
-            # Look up the new path in our index
-            if target_filename in file_index:
-                new_path = file_index[target_filename]
-                if old_path_str != new_path:
-                    candidate['targetPath'] = new_path
-                    was_modified = True
-            else:
-                # If not found in the index, log it for the final report
-                unfound_targets.add(target_filename)
-    
-    if was_modified:
-        try:
-            # Use the existing write_markdown_with_frontmatter
-            write_markdown_with_frontmatter(file_abs_path, yaml_data, original_body_content)
-            return True
-        except Exception as e:
-            print(f"[ERROR] Failed to write updated YAML to {file_abs_path}: {e}")
-            return False
-            
     return False
 
 def update_all_target_paths_in_vault(
@@ -1049,44 +942,10 @@ def update_all_target_paths_in_vault(
     excluded_files_patterns: list = None
 ):
     """
-    Orchestrates the process of updating target paths in YAML frontmatter across the vault.
+    此函数已删除，因为AI评分不再写入YAML frontmatter
     """
-    print(f"\n===== 启动 YAML 路径更新 =====")
-    print(f"- 项目根路径: {project_root_abs}")
-
-    # 1. Build the index of all files and their new relative paths
-    file_index = build_file_index(project_root_abs, excluded_folders, excluded_files_patterns)
-
-    # 2. Iterate through all files and update them
-    updated_file_count = 0
-    unfound_targets = set()
-    
-    all_md_files_relative = list_markdown_files(project_root_abs, project_root_abs, excluded_folders, excluded_files_patterns)
-    total_files = len(all_md_files_relative)
-    
-    print(f"\n[INFO] Starting to process {total_files} files for path updates...")
-
-    for i, file_rel_path in enumerate(all_md_files_relative):
-        file_abs_path = os.path.join(project_root_abs, file_rel_path)
-        print(f"  -> Processing ({i+1}/{total_files}): {file_rel_path}", end='\r')
-        if update_target_paths_in_frontmatter_for_single_file(file_abs_path, file_index, unfound_targets):
-            updated_file_count += 1
-    
-    print("\n" + "="*50)
-    print("        路径更新报告")
-    print("="*50)
-    print(f"总文件数: {total_files}")
-    print(f"YAML 路径已更新的文件数: {updated_file_count}")
-    print("-" * 50)
-    
-    if unfound_targets:
-        print(f"在 YAML 中引用但未在仓库中找到的目标文件 ({len(unfound_targets)}):")
-        for filename in sorted(list(unfound_targets)):
-            print(f"  - {filename}")
-    else:
-        print("所有引用的目标路径均已成功找到并更新。")
-
-    print("\n[INFO] 路径更新脚本完成。")
+    print(f"\n===== YAML 路径更新功能已删除 =====")
+    print(f"由于AI评分不再写入YAML frontmatter，此功能已被删除。")
 
 
 # --- Default constants for argparse ---
@@ -1161,11 +1020,9 @@ def main():
             scan_target_folder_rel = "multiple folders"
     
     print(f"===== Jina处理启动 =====")
-    print(f"- 项目根路径: {project_root_abs}")
     print(f"- 扫描目标: {scan_target_folder_rel}")
     print(f"- 输出目录: {output_dir_in_vault}")
     print(f"- Jina模型: {args.jina_model_name}")
-    print(f"- 最大Jina字符数: {args.max_chars_for_jina}")
     print(f"- 相似度阈值: {args.similarity_threshold}")
     if args.max_candidates_per_source_for_ai_scoring > 0:
         print(f"- 每源笔记的最大AI评分候选数: {args.max_candidates_per_source_for_ai_scoring}")
@@ -1244,7 +1101,21 @@ def main():
     if (args.ai_api_key and args.ai_scoring_mode != 'skip' and 
         args.max_candidates_per_source_for_ai_scoring > 0 and len(candidate_pairs) > 0):
         
-        print(f"\n步骤 4：使用 {args.ai_provider} AI 对候选链接进行智能评分...")
+        ai_provider_name = {
+            'deepseek': 'DeepSeek',
+            'openai': 'OpenAI', 
+            'claude': 'Claude',
+            'gemini': 'Gemini',
+            'custom': '自定义AI'
+        }.get(args.ai_provider, args.ai_provider)
+        
+        scoring_mode_text = {
+            'force': '强制重新评分',
+            'smart': '智能评分',
+            'skip': '跳过评分'
+        }.get(args.ai_scoring_mode, '智能评分')
+        
+        print(f"\n步骤 4：使用 {ai_provider_name} AI 对候选链接进行{scoring_mode_text}...")
         
         force_rescore = args.ai_scoring_mode == 'force'
         score_candidates_and_update_frontmatter(
