@@ -25,6 +25,9 @@ JINA_API_REQUEST_DELAY = 0.1 # Jina API 请求之间的延迟时间（秒）
 
 # --- AI 打分相关配置 ---
 AI_API_REQUEST_DELAY_SECONDS = 1.0 # AI API 调用之间的默认延迟时间（秒）
+# 批处理相关常量
+EMBEDDING_BATCH_SIZE = 10  # 嵌入批处理大小
+AI_SCORING_BATCH_SIZE = 5  # AI评分批处理大小
 
 # AI 提供商默认配置
 DEFAULT_AI_CONFIGS = {
@@ -50,7 +53,11 @@ DEFAULT_AI_CONFIGS = {
     }
 }
 
-
+# --- 代码优化记录 ---
+# REMOVED: get_deepseek_api_key 函数 - 不再需要，API密钥直接通过参数传递
+# REMOVED: call_ai_api_for_pair_relevance 函数 - 已被批量处理函数 call_ai_api_batch_for_relevance 替代
+# REMOVED: parse_ai_response 函数 - 已被批量处理函数 parse_ai_batch_response 替代
+# OPTIMIZED: 更新了 build_ai_batch_request 函数，加入全面的多元化笔记评分标准
 
 # --- 哈希边界标记常量 ---
 # 此标记用于界定笔记内容哈希计算的边界，此边界后的内容不参与哈希计算
@@ -260,17 +267,89 @@ def get_jina_embedding(text: str,
     print(f"错误：达到最大重试次数 {max_retries} 后，Jina API 调用仍然失败。")
     return None
 
+def get_jina_embeddings_batch(texts: list, jina_api_key_to_use: str, jina_model_name_to_use: str, max_retries: int = 3, initial_delay: float = 1.0) -> list:
+    """批量获取多个文本的嵌入向量，包含重试机制"""
+    if not texts:
+        return []
+    if not jina_api_key_to_use: 
+        print("错误：Jina API Key 未提供。")
+        return [None] * len(texts)
+    if not jina_model_name_to_use:
+        print("错误：Jina 模型名称未提供。")
+        return [None] * len(texts)
+    
+    # 过滤掉空文本
+    valid_texts = []
+    text_indices = []
+    for i, text in enumerate(texts):
+        if text and text.strip():
+            valid_texts.append(text)
+            text_indices.append(i)
+    
+    if not valid_texts:
+        print("警告：所有输入文本均为空，跳过嵌入。")
+        return [None] * len(texts)
+
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {jina_api_key_to_use}"
+    }
+    data = {
+        "input": valid_texts,
+        "model": jina_model_name_to_use
+    }
+    
+    delay = initial_delay
+    for attempt in range(max_retries):
+        try:
+            time.sleep(JINA_API_REQUEST_DELAY)
+            response = requests.post(JINA_API_URL, headers=headers, data=json.dumps(data), timeout=60)  # 增加超时时间
+            response.raise_for_status()
+            
+            result = response.json()
+            if result.get("data") and len(result["data"]) == len(valid_texts):
+                # 构建完整结果数组，对于无效文本保留None
+                embeddings = [None] * len(texts)
+                for i, idx in enumerate(text_indices):
+                    if i < len(result["data"]) and result["data"][i].get("embedding"):
+                        embeddings[idx] = result["data"][i]["embedding"]
+                return embeddings
+            else:
+                print(f"错误：Jina API 批量响应格式不正确。响应: {result}")
+                return [None] * len(texts)
+
+        except requests.exceptions.RequestException as e:
+            print(f"错误：批量调用 Jina API 失败 (尝试 {attempt + 1}/{max_retries}): {e}")
+            if hasattr(e, 'response') and e.response is not None:
+                print(f"响应状态码: {e.response.status_code}, 响应内容: {e.response.text[:500]}...")
+                # 如果是客户端错误（如4xx），则不重试
+                if 400 <= e.response.status_code < 500:
+                    return [None] * len(texts)
+            
+            # 等待后重试
+            time.sleep(delay)
+            delay *= 2 # 指数退避
+
+        except Exception as e:
+            print(f"处理批量 Jina API 响应时发生未知错误: {e}")
+            return [None] * len(texts) # 未知错误，不重试
+            
+    print(f"错误：达到最大重试次数 {max_retries} 后，批量 Jina API 调用仍然失败。")
+    return [None] * len(texts)
+
 def process_and_embed_notes(
     project_root_abs: str,
     files_relative_to_project_root: list,
     embeddings_db_path: str,
     jina_api_key_to_use: str,
     jina_model_name_to_use: str,
-    max_chars_for_jina_to_use: int
+    max_chars_for_jina_to_use: int,
+    embedding_batch_size: int = EMBEDDING_BATCH_SIZE
 ) -> dict:
     """
     处理笔记，生成嵌入并将其存储在 SQLite 数据库中。
     返回一个与旧版兼容的字典，用于后续步骤。
+    优化版：使用批量处理来减少API调用次数。
     """
     conn = get_db_connection(embeddings_db_path)
     cursor = conn.cursor()
@@ -293,97 +372,154 @@ def process_and_embed_notes(
     # 用于存储本次运行的所有文件数据，以便返回
     all_files_data_for_return = files_data_from_db.copy()
 
-    for i, file_rel_path in enumerate(files_relative_to_project_root):
-        file_abs_path = os.path.join(project_root_abs, file_rel_path)
-        print(f"处理文件 ({i+1}/{len(files_relative_to_project_root)}): {file_rel_path}")
+    # 批量处理相关变量
+    batch_size = embedding_batch_size
+    total_files = len(files_relative_to_project_root)
+    
+    # 按批次处理文件
+    for batch_start in range(0, total_files, batch_size):
+        batch_end = min(batch_start + batch_size, total_files)
+        batch_files = files_relative_to_project_root[batch_start:batch_end]
         
-        if not os.path.exists(file_abs_path):
-            print(f"  错误：文件 {file_rel_path} 不存在，从数据库中删除。")
-            cursor.execute("DELETE FROM file_embeddings WHERE file_path = ?", (file_rel_path,))
-            if file_rel_path in all_files_data_for_return:
-                del all_files_data_for_return[file_rel_path]
-            continue
-
-        try:
-            original_body_content, existing_frontmatter, _ = read_markdown_with_frontmatter(file_abs_path)
-        except Exception as e:
-            print(f"  错误：读取文件 {file_rel_path} 失败: {e}。跳过。")
-            continue
+        print(f"批量处理文件 ({batch_start+1}-{batch_end}/{total_files})...")
         
-        text_for_processing = extract_content_for_hashing(original_body_content)
+        # 1. 预处理阶段：收集需要嵌入的文件信息
+        batch_contents = []  # 要发送给API的内容
+        batch_file_info = []  # 文件相关信息
         
-        if text_for_processing is None:
-            print(f"  错误: 笔记 '{file_rel_path}' 中未找到哈希边界标记 '{HASH_BOUNDARY_MARKER}'。跳过。")
-            continue
+        for file_rel_path in batch_files:
+            file_abs_path = os.path.join(project_root_abs, file_rel_path)
+            
+            if not os.path.exists(file_abs_path):
+                print(f"  错误：文件 {file_rel_path} 不存在，从数据库中删除。")
+                cursor.execute("DELETE FROM file_embeddings WHERE file_path = ?", (file_rel_path,))
+                if file_rel_path in all_files_data_for_return:
+                    del all_files_data_for_return[file_rel_path]
+                continue
 
-        current_content_hash = calculate_hash_from_content(text_for_processing)
-        stored_hash_in_frontmatter = existing_frontmatter.get("jina_hash")
-
-        needs_embedding_api_call = True
-        final_embedding = None
-
-        db_entry = files_data_from_db.get(file_rel_path)
-        
-        # 检查哈希是否匹配
-        if stored_hash_in_frontmatter and stored_hash_in_frontmatter == current_content_hash:
-            if db_entry and db_entry.get("hash") == current_content_hash:
-                final_embedding = db_entry.get("embedding")
-                needs_embedding_api_call = False
-        elif stored_hash_in_frontmatter:
-             print(f"  内容已修改 (frontmatter哈希 '{stored_hash_in_frontmatter[:8]}' vs 当前 '{current_content_hash[:8]}')。")
-        else:
-            print(f"  新文件或frontmatter中无哈希。")
-
-        if needs_embedding_api_call:
-            processed_files_this_run += 1
-            if not text_for_processing.strip():
-                print(f"  警告：文件 {file_rel_path} 有效内容为空。不嵌入。")
-                final_embedding = None
-            else:
-                text_for_embedding = text_for_processing[:max_chars_for_jina_to_use]
-                embedding_from_api = get_jina_embedding(text_for_embedding, jina_api_key_to_use, jina_model_name_to_use)
-                if embedding_from_api:
-                    final_embedding = embedding_from_api
-                    embedded_count += 1
-                    print(f"  成功获取嵌入: {file_rel_path} (哈希: {current_content_hash[:8]}...)")
-                else:
-                    final_embedding = None
-                    print(f"  未能获取嵌入: {file_rel_path}")
-        
-        # 更新 frontmatter 中的哈希
-        if existing_frontmatter.get("jina_hash") != current_content_hash:
-            existing_frontmatter["jina_hash"] = current_content_hash
             try:
-                write_markdown_with_frontmatter(file_abs_path, existing_frontmatter, original_body_content)
-            except Exception as e_write:
-                print(f"  错误：写入 frontmatter 到 {file_rel_path} 失败: {e_write}")
+                original_body_content, existing_frontmatter, _ = read_markdown_with_frontmatter(file_abs_path)
+                text_for_processing = extract_content_for_hashing(original_body_content)
+                
+                if text_for_processing is None:
+                    print(f"  错误: 笔记 '{file_rel_path}' 中未找到哈希边界标记 '{HASH_BOUNDARY_MARKER}'。跳过。")
+                    continue
 
-        # 更新数据库
-        embedding_json = json.dumps(final_embedding) if final_embedding else None
-        dimension = len(final_embedding) if final_embedding else 0
+                current_content_hash = calculate_hash_from_content(text_for_processing)
+                stored_hash_in_frontmatter = existing_frontmatter.get("jina_hash")
+
+                needs_embedding_api_call = True
+                final_embedding = None
+
+                db_entry = files_data_from_db.get(file_rel_path)
+                
+                # 检查哈希是否匹配
+                if stored_hash_in_frontmatter and stored_hash_in_frontmatter == current_content_hash:
+                    if db_entry and db_entry.get("hash") == current_content_hash:
+                        final_embedding = db_entry.get("embedding")
+                        needs_embedding_api_call = False
+                elif stored_hash_in_frontmatter:
+                     print(f"  内容已修改 (frontmatter哈希 '{stored_hash_in_frontmatter[:8]}' vs 当前 '{current_content_hash[:8]}')。")
+                else:
+                    print(f"  新文件或frontmatter中无哈希。")
+
+                if needs_embedding_api_call:
+                    processed_files_this_run += 1
+                    if not text_for_processing.strip():
+                        print(f"  警告：文件 {file_rel_path} 有效内容为空。不嵌入。")
+                    else:
+                        # 收集用于批量嵌入的信息
+                        text_for_embedding = text_for_processing[:max_chars_for_jina_to_use]
+                        batch_contents.append(text_for_embedding)
+                        batch_file_info.append({
+                            "file_path": file_rel_path,
+                            "abs_path": file_abs_path,
+                            "content_hash": current_content_hash,
+                            "frontmatter": existing_frontmatter,
+                            "original_content": original_body_content,
+                            "processed_content": text_for_processing,
+                            "index": len(batch_contents) - 1  # 记录在batch_contents中的索引
+                        })
+                else:
+                    # 直接更新返回数据
+                    all_files_data_for_return[file_rel_path] = {
+                        "embedding": final_embedding,
+                        "hash": current_content_hash,
+                        "processed_content": text_for_processing
+                    }
+                    
+                # 更新frontmatter中的哈希（如果需要）
+                if existing_frontmatter.get("jina_hash") != current_content_hash:
+                    existing_frontmatter["jina_hash"] = current_content_hash
+                    try:
+                        write_markdown_with_frontmatter(file_abs_path, existing_frontmatter, original_body_content)
+                    except Exception as e_write:
+                        print(f"  错误：写入 frontmatter 到 {file_rel_path} 失败: {e_write}")
+            
+            except Exception as e:
+                print(f"  错误：读取文件 {file_rel_path} 失败: {e}。跳过。")
+                continue
         
-        cursor.execute(
-            """
-            INSERT OR REPLACE INTO file_embeddings 
-            (file_path, content_hash, embedding, processed_content, embedding_dimension, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (
-                file_rel_path,
-                current_content_hash,
-                embedding_json,
-                text_for_processing,
-                dimension,
-                datetime.datetime.now(datetime.timezone.utc).isoformat()
+        # 2. 如果有需要嵌入的内容，批量调用API
+        if batch_contents:
+            print(f"  调用 Jina API 获取 {len(batch_contents)} 个文件的嵌入...")
+            batch_embeddings = get_jina_embeddings_batch(
+                batch_contents, 
+                jina_api_key_to_use, 
+                jina_model_name_to_use
             )
-        )
+            
+            # 3. 处理API返回的嵌入结果
+            for file_info in batch_file_info:
+                index = file_info["index"]
+                file_rel_path = file_info["file_path"]
+                file_abs_path = file_info["abs_path"]
+                
+                embedding = None
+                if index < len(batch_embeddings):
+                    embedding = batch_embeddings[index]
+                
+                if embedding:
+                    embedded_count += 1
+                    print(f"  成功获取嵌入: {file_rel_path} (哈希: {file_info['content_hash'][:8]}...)")
+                else:
+                    print(f"  未能获取嵌入: {file_rel_path}")
+                
+                # 更新frontmatter中的哈希
+                frontmatter = file_info["frontmatter"]
+                if frontmatter.get("jina_hash") != file_info["content_hash"]:
+                    frontmatter["jina_hash"] = file_info["content_hash"]
+                    try:
+                        write_markdown_with_frontmatter(file_abs_path, frontmatter, file_info["original_content"])
+                    except Exception as e_write:
+                        print(f"  错误：写入 frontmatter 到 {file_rel_path} 失败: {e_write}")
 
-        # 更新用于返回的字典
-        all_files_data_for_return[file_rel_path] = {
-            "embedding": final_embedding,
-            "hash": current_content_hash,
-            "processed_content": text_for_processing
-        }
+                # 更新数据库
+                embedding_json = json.dumps(embedding) if embedding else None
+                dimension = len(embedding) if embedding else 0
+        
+                cursor.execute(
+                    """
+                    INSERT OR REPLACE INTO file_embeddings 
+                    (file_path, content_hash, embedding, processed_content, embedding_dimension, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        file_rel_path,
+                        file_info["content_hash"],
+                        embedding_json,
+                        file_info["processed_content"],
+                        dimension,
+                        datetime.datetime.now(datetime.timezone.utc).isoformat()
+                    )
+                )
+
+                # 更新用于返回的字典
+                all_files_data_for_return[file_rel_path] = {
+                    "embedding": embedding,
+                    "hash": file_info["content_hash"],
+                    "processed_content": file_info["processed_content"]
+                }
 
     # 更新元数据
     cursor.execute("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)", 
@@ -417,281 +553,631 @@ def cosine_similarity(vec1: list, vec2: list) -> float:
     return dot_product / (magnitude1 * magnitude2)
 
 def generate_candidate_pairs(embeddings_data_input: dict, similarity_threshold: float) -> list: # candidates_file_path 已移除
-    actual_embeddings_data = {}
-    if isinstance(embeddings_data_input, dict) and "files" in embeddings_data_input: # 检查新结构
-        actual_embeddings_data = embeddings_data_input["files"]
-    elif isinstance(embeddings_data_input, dict): # 兼容旧结构
-        actual_embeddings_data = {k:v for k,v in embeddings_data_input.items() if k != "_metadata"}
-    else:
-        print("错误：传入 generate_candidate_pairs 的 embeddings_data_input 格式不正确。")
-        return []
+    """基于嵌入相似性生成候选链接对"""
+    print("  开始生成候选链接对...")
+    
+    candidates = []
+    files_data = embeddings_data_input.get('files', {})
+    
+    # 获取所有有效的文件路径（有嵌入的）
+    valid_file_paths = []
+    for file_path, file_info in files_data.items():
+        if file_info.get('embedding') is not None:
+            valid_file_paths.append(file_path)
+    
+    total_comparisons = len(valid_file_paths) * (len(valid_file_paths) - 1) // 2
+    completed_comparisons = 0
+    
+    print(f"  共有 {len(valid_file_paths)} 个文件待比较，总计 {total_comparisons} 个比较操作...")
+    
+    # 使用进度条 
+    progress_step = max(1, total_comparisons // 20)  # 每5%更新一次
+    next_progress_milestone = progress_step
+    
+    # 计算每对文件的相似度
+    for i, path1 in enumerate(valid_file_paths):
+        for j, path2 in enumerate(valid_file_paths[i+1:], start=i+1):
+            
+            completed_comparisons += 1
+            if completed_comparisons >= next_progress_milestone:
+                progress_percent = (completed_comparisons / total_comparisons) * 100
+                print(f"  进度: {progress_percent:.1f}% 正在对比: {path1} vs {path2}...")
+                next_progress_milestone += progress_step
+            
+            # 从embeddings_data中获取嵌入
+            embedding1 = files_data[path1].get('embedding')
+            embedding2 = files_data[path2].get('embedding')
+            
+            if embedding1 is None or embedding2 is None:
+                continue
+                
+            # 计算相似度
+            similarity_score = cosine_similarity(embedding1, embedding2)
+            
+            # 添加到候选列表（如果超过阈值）
+            if similarity_score >= similarity_threshold:
+                candidates.append({
+                    'source_path': path1,
+                    'target_path': path2,
+                    'jina_similarity': similarity_score
+                })
+    
+    # 按相似度降序排序
+    candidates.sort(key=lambda x: x['jina_similarity'], reverse=True)
+    print(f"  生成了 {len(candidates)} 个候选链接对。")
+    return candidates
 
-    processed_embeddings = {}
-    for path, data_entry in actual_embeddings_data.items():
-        if data_entry and isinstance(data_entry, dict) and \
-           "embedding" in data_entry and data_entry["embedding"] and isinstance(data_entry["embedding"], list):
-            processed_embeddings[path] = data_entry["embedding"]
+# 添加缺失的函数
+
+def build_ai_batch_request(ai_provider: str, model_name: str, api_key: str, 
+                          prompt_pairs: list, max_content_length: int) -> tuple:
+    """构建不同AI提供商的批量请求体和头部"""
+    
+    # 适用于多元化笔记内容的评分指南
+    comprehensive_scoring_guide = """
+    作为笔记关联性评分专家，请评估以下多对内容的关联度。这些内容可能包括知识笔记、诗歌创作、灵感片段、散文、情感记录等多样化形式。对每对内容给出0-10的整数评分，基于以下全面标准：
+
+    【评分标准：适用于多元内容】
+    10分 - 深度关联：
+      • 内容间存在明显的思想、情感或意象共鸣
+      • 一篇内容直接启发、延伸或回应另一篇
+      • 两篇形成完整的表达整体，共同构建一个更丰富的意境或思想
+      • 同时阅读会产生"啊哈"时刻，带来新的领悟
+
+    8-9分 - 强烈关联：
+      • 共享核心情感、意象或主题
+      • 表达相似的思想但通过不同角度或形式
+      • 创作背景或灵感来源紧密相连
+      • 一篇可以深化对另一篇的理解和欣赏
+
+    6-7分 - 明显关联：
+      • 存在清晰的主题或情绪连接
+      • 使用相似的意象或表达方式
+      • 关联点足够丰富，能激发新的思考
+      • 并置阅读能够丰富整体体验
+
+    4-5分 - 中等关联：
+      • 有一些共通元素，但整体走向不同
+      • 某些片段或意象存在呼应，但不是主体
+      • 关联更加微妙或需要一定解读
+      • 链接可能对部分读者有启发价值
+
+    2-3分 - 轻微关联：
+      • 关联仅限于表面术语或零星概念
+      • 主题、风格或情感基调大不相同
+      • 联系需要刻意寻找才能发现
+      • 链接价值有限，大多数读者难以察觉关联
+
+    0-1分 - 几乎无关联：
+      • 内容、主题、意象几乎完全不同
+      • 无法找到明显的思想或情感连接
+      • 链接不会为读者理解任一内容增添价值
+      • 并置阅读无法产生有意义的关联或启发
+    """
+    
+    # 针对不同API提供商构建请求
+    if ai_provider == 'deepseek':
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}"
+        }
         
-    file_paths = list(processed_embeddings.keys())
-    if len(file_paths) < 2:
-        print("有效嵌入少于2个，无法生成候选对。")
+        # 修改为与OpenAI兼容的请求格式
+        requests_array = []
+        for i, pair in enumerate(prompt_pairs, start=1):
+            source_name = pair['source_name']
+            target_name = pair['target_name']
+            source_content = pair['source_content'][:max_content_length]
+            target_content = pair['target_content'][:max_content_length]
+            
+            requests_array.append({
+                "model": model_name,
+                "messages": [
+                    {"role": "system", "content": "你是善于发现内容关联的评分专家。"},
+                    {"role": "user", "content": f"""评估这对内容的关联度，给出0到10的整数评分。
+
+内容一：{source_name}
+{source_content}
+
+内容二：{target_name}
+{target_content}
+
+{comprehensive_scoring_guide}
+
+请只回复一个0-10的整数评分，不要有任何解释或额外文字。"""}
+                ],
+                "max_tokens": 20,
+                "temperature": 0,
+                "top_p": 0.8
+            })
+        
+        api_url = DEFAULT_AI_CONFIGS['deepseek']['api_url']
+        return requests_array, headers, api_url
+        
+    elif ai_provider == 'openai':
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}"
+        }
+        
+        requests_array = []
+        for i, pair in enumerate(prompt_pairs, start=1):
+            source_name = pair['source_name']
+            target_name = pair['target_name']
+            source_content = pair['source_content'][:max_content_length]
+            target_content = pair['target_content'][:max_content_length]
+            
+            requests_array.append({
+                "model": model_name,
+                "messages": [
+                    {"role": "system", "content": "你是善于发现内容关联的评分专家。"},
+                    {"role": "user", "content": f"""评估以下这对内容的关联度，给出0到10的整数评分。
+
+内容一：{source_name}
+{source_content}
+
+内容二：{target_name}
+{target_content}
+
+{comprehensive_scoring_guide}
+
+请只回复一个0-10的整数评分，不要有任何解释或额外文字。"""}
+                ],
+                "max_tokens": 10,
+                "temperature": 0
+            })
+        
+        api_url = DEFAULT_AI_CONFIGS['openai']['api_url']
+        return requests_array, headers, api_url
+        
+    elif ai_provider == 'claude':
+        headers = {
+            "x-api-key": api_key,
+            "content-type": "application/json",
+            "anthropic-version": "2023-06-01"
+        }
+        
+        requests_array = []
+        for i, pair in enumerate(prompt_pairs, start=1):
+            source_name = pair['source_name']
+            target_name = pair['target_name']
+            source_content = pair['source_content'][:max_content_length]
+            target_content = pair['target_content'][:max_content_length]
+            
+            requests_array.append({
+                "model": model_name,
+                "max_tokens": 10,
+                "system": "你是善于发现内容关联的评分专家。请只输出评分数字，不要有任何解释或额外文字。",
+                "messages": [
+                    {"role": "user", "content": f"""评估以下这对内容的关联度，给出0到10的整数评分。
+
+内容一：{source_name}
+{source_content}
+
+内容二：{target_name}
+{target_content}
+
+{comprehensive_scoring_guide}
+
+请只回复一个0-10的整数评分，不要有任何解释或额外文字。"""}
+                ],
+                "temperature": 0
+            })
+        
+        api_url = DEFAULT_AI_CONFIGS['claude']['api_url']
+        return requests_array, headers, api_url
+        
+    elif ai_provider == 'gemini':
+        headers = {
+            "Content-Type": "application/json"
+        }
+        
+        requests_array = []
+        for i, pair in enumerate(prompt_pairs, start=1):
+            source_name = pair['source_name']
+            target_name = pair['target_name']
+            source_content = pair['source_content'][:max_content_length]
+            target_content = pair['target_content'][:max_content_length]
+            
+            api_url_with_key = f"{DEFAULT_AI_CONFIGS['gemini']['api_url']}/{model_name}:generateContent?key={api_key}"
+            
+            requests_array.append({
+                "contents": [
+                    {
+                        "parts": [
+                            {
+                                "text": f"""作为善于发现内容关联的评分专家，请评估以下这对内容的关联度，给出0到10的整数评分。
+
+内容一：{source_name}
+{source_content}
+
+内容二：{target_name}
+{target_content}
+
+{comprehensive_scoring_guide}
+
+请只回复一个0-10的整数评分，不要有任何解释或额外文字。"""
+                            }
+                        ]
+                    }
+                ],
+                "generationConfig": {
+                    "temperature": 0,
+                    "maxOutputTokens": 10
+                }
+            })
+            
+        return requests_array, headers, DEFAULT_AI_CONFIGS['gemini']['api_url']
+        
+    else:  # 自定义API
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}"
+        }
+        
+        messages_array = []
+        for i, pair in enumerate(prompt_pairs, start=1):
+            source_name = pair['source_name']
+            target_name = pair['target_name']
+            source_content = pair['source_content'][:max_content_length]
+            target_content = pair['target_content'][:max_content_length]
+            
+            messages_array.append([
+                {"role": "user", "content": f"""作为善于发现内容关联的评分专家，请评估这对内容的关联度，给出0到10的整数评分。
+
+内容一：{source_name}
+{source_content}
+
+内容二：{target_name}
+{target_content}
+
+{comprehensive_scoring_guide}
+
+请只回复一个0-10的整数评分，不要有任何解释或额外文字。"""}
+            ])
+        
+        data = {
+            "model": model_name,
+            "messages_list": messages_array,
+            "max_tokens": 20,
+            "temperature": 0
+        }
+        
+        return data, headers, DEFAULT_AI_CONFIGS['custom']['api_url']
+
+def call_ai_api_batch_for_relevance(ai_provider: str, model_name: str, api_key: str, api_url: str,
+                                   prompt_pairs: list, headers: dict, data: dict | list, 
+                                   max_retries: int = 3, initial_delay: float = 1.0) -> list:
+    """批量调用AI API评估候选对的相关性"""
+    
+    if not prompt_pairs:
+        print("  无候选对需要评分。")
         return []
-    
-    candidate_pairs = []
-    print(f"开始从 {len(file_paths)} 个有效嵌入笔记中全新生成候选对...")
-    total_comparisons = len(file_paths) * (len(file_paths) - 1) // 2
-    
-    processed_pairs_count = 0
-    for i in range(len(file_paths)):
-        for j in range(i + 1, len(file_paths)):
-            path1, path2 = file_paths[i], file_paths[j]
-            emb1, emb2 = processed_embeddings[path1], processed_embeddings[path2]
-            similarity = cosine_similarity(emb1, emb2)
-            processed_pairs_count += 1
-            if processed_pairs_count % 5000 == 0 or processed_pairs_count == total_comparisons:
-                print(f"  已比较 {processed_pairs_count}/{total_comparisons} 对笔记...")
-
-            if similarity >= similarity_threshold:
-                # 生成双向关系，但避免在AI打分阶段重复处理
-                candidate_pairs.append({
-                    "source_path": path1, 
-                    "target_path": path2, 
-                    "jina_similarity": similarity,
-                    "pair_id": f"{min(path1, path2)}<->{max(path1, path2)}"  # 唯一标识符
-                })
-                candidate_pairs.append({
-                    "source_path": path2, 
-                    "target_path": path1, 
-                    "jina_similarity": similarity,
-                    "pair_id": f"{min(path1, path2)}<->{max(path1, path2)}"  # 相同的标识符
-                })
-    
-    final_map = {}
-    for p in candidate_pairs:
-        src_path_norm = p["source_path"].replace(os.sep, '/')
-        tgt_path_norm = p["target_path"].replace(os.sep, '/')
-        key = (src_path_norm, tgt_path_norm, round(p["jina_similarity"], 6))
-        if key not in final_map:
-            p_norm = p.copy()
-            p_norm["source_path"] = src_path_norm
-            p_norm["target_path"] = tgt_path_norm
-            final_map[key] = p_norm
-    
-    unique_sorted_pairs = sorted(
-        list(final_map.values()),
-        key=lambda x: (x["source_path"], -x["jina_similarity"], x["target_path"])
-    )
-    print(f"最终生成 {len(unique_sorted_pairs)} 个候选链接对。")
-    return unique_sorted_pairs
-
-# REMOVED: get_deepseek_api_key function. Key is passed directly.
-
-def call_ai_api_for_pair_relevance(
-    source_processed_content: str,  # 已经处理过的内容，不需要再次提取
-    target_processed_content: str,  # 已经处理过的内容，不需要再次提取
-    source_file_path: str,
-    target_file_path: str, 
-    api_key: str,
-    # --- AI 提供商参数 ---
-    ai_provider: str,
-    ai_api_url: str,
-    ai_model_name: str,
-    max_content_length_for_ai_to_use: int,
-    max_retries: int = 3,
-    initial_delay: float = 1.0
-) -> dict:
-    if not api_key:
-        print(f"错误：{ai_provider} API Key 未配置。无法为 {source_file_path} -> {target_file_path} 打分。")
-        return {"ai_score": -1, "error": "API Key not configured"}
-
-    source_file_name = os.path.basename(source_file_path)
-    target_file_name = os.path.basename(target_file_path)
-
-    # 直接使用已经处理过的内容，不需要再次检查哈希边界标记
-    source_excerpt = source_processed_content[:max_content_length_for_ai_to_use]
-    target_excerpt = target_processed_content[:max_content_length_for_ai_to_use]
-
-    # 构建请求体和头部，根据不同AI提供商调整
-    request_body, headers = build_ai_request(
-        ai_provider, ai_model_name, api_key, source_file_name, target_file_name,
-        source_excerpt, target_excerpt, max_content_length_for_ai_to_use
-    )
-
-    print(f"  AI打分 (调用{ai_provider} API): {source_file_path} -> {target_file_path}")
     
     delay = initial_delay
-    for attempt in range(max_retries):
-        try:
-            # 对于Gemini，需要在URL中添加API密钥
-            if ai_provider == 'gemini':
-                # 构建完整的Gemini API URL
-                model_path = ai_model_name if ai_model_name else 'gemini-1.5-flash'
-                full_url = f"{ai_api_url}/{model_path}:generateContent?key={api_key}"
-            else:
-                full_url = ai_api_url
-                
-            # 延迟由调用者处理 (score_candidates_and_update_frontmatter)
-            response = requests.post(full_url, headers=headers, json=request_body, timeout=45)
-            
-            if not response.ok:
-                error_message = f"{ai_provider} API 失败 {source_file_path}->{target_file_path}: HTTP {response.status_code}"
-                try: error_message += f" - {response.json()}"
-                except json.JSONDecodeError: error_message += f" - {response.text[:200]}"
-                print(error_message)
-                # 如果是客户端错误（如4xx），则不重试
-                if 400 <= response.status_code < 500:
-                    return {"ai_score": -1, "error": f"API Error: HTTP {response.status_code}"}
-                # 对于服务器错误，进行重试
-                raise requests.exceptions.RequestException(f"Server error: {response.status_code}")
-
-            # 解析响应，根据不同AI提供商调整
-            score = parse_ai_response(response, ai_provider, source_file_path, target_file_path)
-            if score is not None:
-                return {"ai_score": score}
-            else:
-                return {"ai_score": -1, "error": "Failed to parse AI response"} # 解析失败，不重试
-                
-        except requests.exceptions.Timeout:
-            print(f"{ai_provider} API 超时 (尝试 {attempt + 1}/{max_retries}) {source_file_path}->{target_file_path}")
-            time.sleep(delay)
-            delay *= 2
-        except requests.exceptions.RequestException as e:
-            print(f"{ai_provider} API 请求失败 (尝试 {attempt + 1}/{max_retries}): {e}")
-            time.sleep(delay)
-            delay *= 2
-        except Exception as e_unknown: # 捕获更广泛的异常
-            print(f"{ai_provider} API 未知错误 {source_file_path}->{target_file_path}: {e_unknown}")
-            return {"ai_score": -1, "error": f"Unknown API call error: {e_unknown}"} # 未知错误，不重试
-            
-    print(f"错误：达到最大重试次数 {max_retries} 后，AI API 调用仍然失败。")
-    return {"ai_score": -1, "error": "API call failed after multiple retries"}
-
-
-def build_ai_request(ai_provider: str, model_name: str, api_key: str, 
-                    source_file_name: str, target_file_name: str,
-                    source_excerpt: str, target_excerpt: str, 
-                    max_content_length: int) -> tuple[dict, dict]:
-    """构建不同AI提供商的请求体和头部"""
+    all_results = []
     
-    # 使用 .format() 来避免 f-string 嵌套大括号的问题
-    prompt_template = """你是一个 Obsidian 笔记链接评估助手。请直接比较以下【源笔记内容】和【目标笔记内容】，判断它们之间的相关性。
-你的任务是评估从源笔记指向目标笔记建立一个链接是否合适。
-请给出 0-10 之间的整数评分，其中 10 表示极其相关，7-9 表示比较相关，6 表示你认为合格的相关性，1-5 表示弱相关，0 表示不相关或无法判断。
-
-源笔记文件名: {source_file_name}
-目标笔记文件名: {target_file_name}
-
-【源笔记内容】(最多 {max_content_length} 字符):
----
-{source_excerpt}
----
-
-【目标笔记内容】(最多 {max_content_length} 字符):
----
-{target_excerpt}
----
-
-请严格按照以下 JSON 格式返回你的评分: {{"relevance_score": <你的评分>}}
-例如: {{"relevance_score": 8}}
-返回纯粹的JSON，不包含任何Markdown标记."""
-
-    prompt = prompt_template.format(
-        source_file_name=source_file_name,
-        target_file_name=target_file_name,
-        max_content_length=max_content_length,
-        source_excerpt=source_excerpt,
-        target_excerpt=target_excerpt
-    )
-
-    if ai_provider == 'claude':
-        # Claude API 格式
-        request_body = {
-            "model": model_name,
-            "max_tokens": 1024,
-            "messages": [{"role": "user", "content": prompt}]
-        }
-        headers = {
-            'Content-Type': 'application/json',
-            'x-api-key': api_key,
-            'anthropic-version': '2023-06-01'
-        }
-    elif ai_provider == 'gemini':
-        # Gemini API 格式
-        request_body = {
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {
-                "response_mime_type": "application/json"
-            }
-        }
-        headers = {
-            'Content-Type': 'application/json'
-        }
-    else:
-        # OpenAI 兼容格式 (DeepSeek, OpenAI, Custom)
-        request_body = {
-            "model": model_name,
-            "messages": [{"role": "user", "content": prompt}],
-            "stream": False
-        }
-        if ai_provider in ['deepseek', 'openai']:
-            request_body["response_format"] = {"type": "json_object"}
-        
-        headers = {
-            'Content-Type': 'application/json',
-            'Authorization': f'Bearer {api_key}'
-        }
-    
-    return request_body, headers
-
-
-def parse_ai_response(response: requests.Response, ai_provider: str, 
-                     source_file_path: str, target_file_path: str) -> int | None:
-    """解析不同AI提供商的响应"""
     try:
-        data = response.json()
+        if ai_provider == 'deepseek':
+            # 修改为逐个发送请求，与OpenAI处理方式相同
+            for i, request_data in enumerate(data):
+                for attempt in range(max_retries):
+                    try:
+                        time.sleep(AI_API_REQUEST_DELAY_SECONDS)
+                        print(f"  正在调用 DeepSeek API, 尝试 {attempt + 1}/{max_retries}...")
+                        response = requests.post(
+                            api_url, 
+                            headers=headers, 
+                            json=request_data,
+                            timeout=30
+                        )
+                        
+                        # 如果收到422响应，尝试提取详细错误信息
+                        if response.status_code == 422:
+                            error_detail = response.json() if response.text else "无详细错误信息"
+                            print(f"  收到422错误: {error_detail}")
+                            raise Exception(f"DeepSeek API返回422错误: {error_detail}")
+                        
+                        response.raise_for_status()
+                        result = parse_ai_batch_response('openai', response.json(), [prompt_pairs[i]])
+                        all_results.extend(result)
+                        break
+                    except requests.exceptions.HTTPError as e:
+                        error_msg = f"HTTP错误: {e}"
+                        if hasattr(e, 'response') and e.response.text:
+                            try:
+                                error_detail = e.response.json()
+                                error_msg += f", 详细信息: {error_detail}"
+                            except:
+                                error_msg += f", 响应内容: {e.response.text[:500]}"
+                        
+                        print(error_msg)
+                        if attempt == max_retries - 1:
+                            print(f"  错误: 在尝试 {max_retries} 次后仍无法调用 {ai_provider} API: {error_msg}")
+                            all_results.append({"error": str(e), "ai_score": 0, 
+                                              "source_path": prompt_pairs[i]['source_path'], 
+                                              "target_path": prompt_pairs[i]['target_path'],
+                                              "jina_similarity": prompt_pairs[i].get('jina_similarity', 0)})
+                        delay *= 2
+                        print(f"  等待 {delay} 秒后重试...")
+                        time.sleep(delay)
+                    except Exception as e:
+                        error_msg = f"未知错误: {e}"
+                        print(error_msg)
+                        if attempt == max_retries - 1:
+                            print(f"  错误: 在尝试 {max_retries} 次后仍无法调用 {ai_provider} API: {error_msg}")
+                            all_results.append({"error": str(e), "ai_score": 0,
+                                              "source_path": prompt_pairs[i]['source_path'], 
+                                              "target_path": prompt_pairs[i]['target_path'],
+                                              "jina_similarity": prompt_pairs[i].get('jina_similarity', 0)})
+                        delay *= 2
+                        print(f"  等待 {delay} 秒后重试...")
+                        time.sleep(delay)
         
-        message_content_str = ""
-        if ai_provider == 'claude':
-            if data and data.get("content") and len(data["content"]) > 0:
-                message_content_str = data["content"][0].get("text", "")
+        elif ai_provider == 'openai':
+            # OpenAI API 调用每个请求
+            for i, request_data in enumerate(data):
+                for attempt in range(max_retries):
+                    try:
+                        time.sleep(AI_API_REQUEST_DELAY_SECONDS)
+                        response = requests.post(
+                            api_url, 
+                            headers=headers, 
+                            json=request_data,
+                            timeout=30
+                        )
+                        response.raise_for_status()
+                        result = parse_ai_batch_response(ai_provider, response.json(), [prompt_pairs[i]])
+                        all_results.extend(result)
+                        break
+                    except Exception as e:
+                        if attempt == max_retries - 1:
+                            print(f"  错误: 在尝试 {max_retries} 次后仍无法调用 OpenAI API 对对 {i+1}: {e}")
+                            all_results.append({"error": str(e), "ai_score": 0})
+                        delay *= 2
+                        time.sleep(delay)
+        
+        elif ai_provider == 'claude':
+            # Claude API 调用每个请求
+            for i, request_data in enumerate(data):
+                for attempt in range(max_retries):
+                    try:
+                        time.sleep(AI_API_REQUEST_DELAY_SECONDS)
+                        response = requests.post(
+                            api_url, 
+                            headers=headers, 
+                            json=request_data,
+                            timeout=30
+                        )
+                        response.raise_for_status()
+                        result = parse_ai_batch_response(ai_provider, response.json(), [prompt_pairs[i]])
+                        all_results.extend(result)
+                        break
+                    except Exception as e:
+                        if attempt == max_retries - 1:
+                            print(f"  错误: 在尝试 {max_retries} 次后仍无法调用 Claude API 对对 {i+1}: {e}")
+                            all_results.append({"error": str(e), "ai_score": 0})
+                        delay *= 2
+                        time.sleep(delay)
+                        
         elif ai_provider == 'gemini':
-            if data and data.get("candidates") and len(data["candidates"]) > 0:
-                content = data["candidates"][0].get("content", {})
-                if content.get("parts") and len(content["parts"]) > 0:
-                    message_content_str = content["parts"][0].get("text", "")
-        else: # OpenAI 兼容格式
-            if data and data.get("choices") and data["choices"][0].get("message", {}).get("content"):
-                message_content_str = data["choices"][0]["message"]["content"]
+            # Gemini API 调用每个请求，需要完整URL+API密钥
+            for i, request_data in enumerate(data):
+                for attempt in range(max_retries):
+                    try:
+                        time.sleep(AI_API_REQUEST_DELAY_SECONDS)
+                        full_url = f"{api_url}/{model_name}:generateContent?key={api_key}"
+                        response = requests.post(
+                            full_url,
+                            headers=headers, 
+                            json=request_data,
+                            timeout=30
+                        )
+                        response.raise_for_status()
+                        result = parse_ai_batch_response(ai_provider, response.json(), [prompt_pairs[i]])
+                        all_results.extend(result)
+                        break
+                    except Exception as e:
+                        if attempt == max_retries - 1:
+                            print(f"  错误: 在尝试 {max_retries} 次后仍无法调用 Gemini API 对对 {i+1}: {e}")
+                            all_results.append({"error": str(e), "ai_score": 0})
+                        delay *= 2
+                        time.sleep(delay)
+        
+        else:  # 自定义API
+            # 假设自定义API支持批量请求，类似DeepSeek
+            for attempt in range(max_retries):
+                try:
+                    time.sleep(AI_API_REQUEST_DELAY_SECONDS)
+                    response = requests.post(
+                        api_url, 
+                        headers=headers, 
+                        json=data,
+                        timeout=60
+                    )
+                    response.raise_for_status()
+                    all_results = parse_ai_batch_response(ai_provider, response.json(), prompt_pairs)
+                    break
+                except Exception as e:
+                    if attempt == max_retries - 1:
+                        print(f"  错误: 在尝试 {max_retries} 次后仍无法调用自定义 API: {e}")
+                        return []
+                    delay *= 2
+                    time.sleep(delay)
+                    
+    except Exception as e:
+        print(f"  调用 {ai_provider} API 发生意外错误: {e}")
+        return []
+        
+    return all_results
 
-        if not message_content_str:
-            print(f"{ai_provider} API 响应格式不符或内容为空 {source_file_path}->{target_file_path}: {data}")
-            return None
-
-        # 解析JSON评分
-        try:
-            cleaned_json_str = re.sub(r'^```json\s*|\s*```$', '', message_content_str.strip(), flags=re.DOTALL)
-            parsed_json = json.loads(cleaned_json_str)
-            if isinstance(parsed_json.get("relevance_score"), (int, float)):
-                score = max(0, min(10, round(float(parsed_json["relevance_score"]))))
-                return score
-            else:
-                print(f"{ai_provider} API JSON 结构不完整 {source_file_path}->{target_file_path}: {parsed_json}")
-                return None
-        except json.JSONDecodeError as e_json:
-            print(f"{ai_provider} API 响应非JSON {source_file_path}->{target_file_path}: '{message_content_str}', Error: {e_json}")
-            return None
+def parse_ai_batch_response(ai_provider: str, response_data: dict | list, prompt_pairs: list) -> list:
+    """解析不同AI提供商的批量响应，提取评分"""
+    results = []
+    
+    try:
+        if ai_provider == 'deepseek':
+            responses = response_data.get('choices', [])
+            for i, choice in enumerate(responses):
+                if i >= len(prompt_pairs):
+                    break
+                    
+                pair = prompt_pairs[i]
+                content = choice.get('message', {}).get('content', '')
+                
+                # 提取数字评分
+                score = extract_score_from_text(content)
+                
+                if score is not None:
+                    results.append({
+                        'source_path': pair['source_path'],
+                        'target_path': pair['target_path'],
+                        'ai_score': score,
+                        'jina_similarity': pair.get('jina_similarity', 0)
+                    })
+                else:
+                    print(f"  警告: 无法从响应中提取评分: {content}")
+                    results.append({
+                        'source_path': pair['source_path'],
+                        'target_path': pair['target_path'],
+                        'ai_score': 0,
+                        'jina_similarity': pair.get('jina_similarity', 0)
+                    })
             
-    except json.JSONDecodeError as e:
-        print(f"{ai_provider} API 响应解析失败 {source_file_path}->{target_file_path}: {e}")
-        return None
+        elif ai_provider == 'openai':
+            # 单个响应
+            choices = response_data.get('choices', [])
+            if choices and len(prompt_pairs) > 0:
+                pair = prompt_pairs[0]
+                content = choices[0].get('message', {}).get('content', '')
+                
+                score = extract_score_from_text(content)
+                
+                if score is not None:
+                    results.append({
+                        'source_path': pair['source_path'],
+                        'target_path': pair['target_path'],
+                        'ai_score': score,
+                        'jina_similarity': pair.get('jina_similarity', 0)
+                    })
+                else:
+                    results.append({
+                        'source_path': pair['source_path'],
+                        'target_path': pair['target_path'],
+                        'ai_score': 0,
+                        'jina_similarity': pair.get('jina_similarity', 0)
+                    })
+            
+        elif ai_provider == 'claude':
+            # 单个响应
+            content = response_data.get('content', [{}])[0].get('text', '')
+            if content and len(prompt_pairs) > 0:
+                pair = prompt_pairs[0]
+                
+                score = extract_score_from_text(content)
+                
+                if score is not None:
+                    results.append({
+                        'source_path': pair['source_path'],
+                        'target_path': pair['target_path'],
+                        'ai_score': score,
+                        'jina_similarity': pair.get('jina_similarity', 0)
+                    })
+                else:
+                    results.append({
+                        'source_path': pair['source_path'],
+                        'target_path': pair['target_path'],
+                        'ai_score': 0,
+                        'jina_similarity': pair.get('jina_similarity', 0)
+                    })
+                    
+        elif ai_provider == 'gemini':
+            # 单个响应
+            content = ""
+            if 'candidates' in response_data and len(response_data['candidates']) > 0:
+                if 'content' in response_data['candidates'][0]:
+                    content_parts = response_data['candidates'][0]['content'].get('parts', [])
+                    if content_parts and 'text' in content_parts[0]:
+                        content = content_parts[0]['text']
+            
+            if content and len(prompt_pairs) > 0:
+                pair = prompt_pairs[0]
+                score = extract_score_from_text(content)
+                
+                if score is not None:
+                    results.append({
+                        'source_path': pair['source_path'],
+                        'target_path': pair['target_path'],
+                        'ai_score': score,
+                        'jina_similarity': pair.get('jina_similarity', 0)
+                    })
+                else:
+                    results.append({
+                        'source_path': pair['source_path'],
+                        'target_path': pair['target_path'],
+                        'ai_score': 0,
+                        'jina_similarity': pair.get('jina_similarity', 0)
+                    })
+            
+        else:  # 自定义API
+            # 假设自定义API返回类似DeepSeek的格式
+            responses = response_data.get('choices', [])
+            for i, choice in enumerate(responses):
+                if i >= len(prompt_pairs):
+                    break
+                    
+                pair = prompt_pairs[i]
+                content = choice.get('message', {}).get('content', '')
+                
+                score = extract_score_from_text(content)
+                
+                if score is not None:
+                    results.append({
+                        'source_path': pair['source_path'],
+                        'target_path': pair['target_path'],
+                        'ai_score': score,
+                        'jina_similarity': pair.get('jina_similarity', 0)
+                    })
+                else:
+                    results.append({
+                        'source_path': pair['source_path'],
+                        'target_path': pair['target_path'],
+                        'ai_score': 0,
+                        'jina_similarity': pair.get('jina_similarity', 0)
+                    })
+    
+    except Exception as e:
+        print(f"  解析 {ai_provider} 响应时发生错误: {e}")
+        
+    return results
 
-
-def normalize_path_python(path_str: str) -> str:
-    if not path_str: return ""
-    return path_str.replace(os.sep, '/')
+def extract_score_from_text(text: str) -> int | None:
+    """从文本中提取0-10的整数评分"""
+    # 尝试直接将文本转换为整数
+    text = text.strip()
+    try:
+        score = int(text)
+        if 0 <= score <= 10:
+            return score
+    except ValueError:
+        pass
+    
+    # 使用正则表达式查找评分
+    import re
+    score_pattern = r'(?<!\d)([0-9]|10)(?!\d)'
+    matches = re.search(score_pattern, text)
+    if matches:
+        try:
+            score = int(matches.group(1))
+            if 0 <= score <= 10:
+                return score
+        except ValueError:
+            pass
+    
+    return None
 
 def score_candidates_and_update_frontmatter(
-    candidate_pairs_list: list,
+    candidate_pairs: list,
     project_root_abs: str,
     embeddings_db_path: str,
     ai_scores_db_path: str,
@@ -700,166 +1186,160 @@ def score_candidates_and_update_frontmatter(
     ai_api_key: str,
     ai_model_name: str,
     max_content_length_for_ai_to_use: int,
-    force_rescore: bool
-):
-    if not ai_api_key:
-        print(f"错误：{ai_provider} API Key 未提供，跳过 AI 打分流程。")
+    force_rescore: bool = False,
+    ai_scoring_batch_size: int = AI_SCORING_BATCH_SIZE
+) -> None:
+    """对候选链接对进行AI评分并更新"""
+    if not candidate_pairs:
+        print("  没有候选链接对需要评分。")
         return
 
-    print("正在对候选对进行去重以避免重复AI打分...")
-    unique_pairs_for_ai = {}
-    for pair in candidate_pairs_list:
-        pair_id = pair.get("pair_id")
-        if pair_id and pair_id not in unique_pairs_for_ai:
-            unique_pairs_for_ai[pair_id] = pair
-
-    print(f"去重后需要AI打分的唯一关系对数量: {len(unique_pairs_for_ai)} (原始: {len(candidate_pairs_list)})")
-
-    ai_score_cache = load_ai_scores_from_db(ai_scores_db_path)
-
-    # 从嵌入数据库一次性加载所有处理过的内容
-    embeddings_conn = get_db_connection(embeddings_db_path)
-    embeddings_cursor = embeddings_conn.cursor()
-    embeddings_cursor.execute("SELECT file_path, processed_content FROM file_embeddings")
-    processed_content_cache = {row[0]: row[1] for row in embeddings_cursor.fetchall()}
-    embeddings_conn.close()
-    print(f"✅ 成功从嵌入数据库加载 {len(processed_content_cache)} 条内容用于AI评分。")
-
-    total_unique_pairs = len(unique_pairs_for_ai)
-    processed_unique_pairs = 0
+    print(f"  使用 {ai_provider} AI 对 {len(candidate_pairs)} 个候选链接对进行评分...")
     
-    for pair_id, pair in unique_pairs_for_ai.items():
-        processed_unique_pairs += 1
-        source_path = pair["source_path"]
-        target_path = pair["target_path"]
+    conn = get_db_connection(ai_scores_db_path)
+    cursor = conn.cursor()
+    
+    # 建立文件路径到ID的映射
+    file_path_to_id = {}
+    cursor.execute("SELECT id, file_path FROM file_paths")
+    for row in cursor.fetchall():
+        file_path_to_id[row[1]] = row[0]
+    
+    # 为所有源和目标路径创建ID（如果不存在）
+    unique_paths = set()
+    for pair in candidate_pairs:
+        unique_paths.add(pair['source_path'])
+        unique_paths.add(pair['target_path'])
+    
+    for path in unique_paths:
+        if path not in file_path_to_id:
+            cursor.execute(
+                "INSERT INTO file_paths (file_path) VALUES (?) ON CONFLICT(file_path) DO NOTHING", 
+                (path,)
+            )
+            file_path_to_id[path] = cursor.lastrowid
+    
+    conn.commit()
+    
+    # 获取已评分的关系
+    scored_relationships = {}
+    cursor.execute("""
+        SELECT ar.source_file_id, ar.target_file_id, ar.ai_score, ar.jina_similarity
+        FROM ai_relationships ar
+    """)
+    
+    for row in cursor.fetchall():
+        source_id, target_id, ai_score, jina_similarity = row
+        scored_relationships[(source_id, target_id)] = (ai_score, jina_similarity)
+    
+    # 确定需要评分的对
+    pairs_to_score = []
+    for pair in candidate_pairs:
+        source_path = pair['source_path']
+        target_path = pair['target_path']
         
-        print(f"  AI打分唯一对 ({processed_unique_pairs}/{total_unique_pairs}): {source_path} <-> {target_path}")
-        
-        if not force_rescore and pair_id in ai_score_cache:
-            print(f"    AI评分已存在于缓存中 (评分: {ai_score_cache[pair_id]}/10)，跳过")
-            continue
-        
-        clean_source_body = processed_content_cache.get(source_path)
-        clean_target_body = processed_content_cache.get(target_path)
-
-        if clean_source_body is None or clean_target_body is None:
-            print(f"    ❌ 无法从嵌入数据库获取内容，跳过AI打分: {source_path} 或 {target_path}")
+        if source_path not in file_path_to_id or target_path not in file_path_to_id:
             continue
             
-        time.sleep(AI_API_REQUEST_DELAY_SECONDS)
+        source_id = file_path_to_id[source_path]
+        target_id = file_path_to_id[target_path]
+        
+        # 跳过已评分的对，除非强制重新评分
+        if not force_rescore and (source_id, target_id) in scored_relationships:
+            continue
+            
+        # 读取文件内容
+        try:
+            source_file_path = os.path.join(project_root_abs, source_path)
+            target_file_path = os.path.join(project_root_abs, target_path)
+            
+            if not os.path.exists(source_file_path) or not os.path.exists(target_file_path):
+                print(f"  警告: 无法找到文件: {source_file_path} 或 {target_file_path}")
+                continue
+                
+            source_content, _, _ = read_markdown_with_frontmatter(source_file_path)
+            target_content, _, _ = read_markdown_with_frontmatter(target_file_path)
+            
+            pairs_to_score.append({
+                'source_path': source_path,
+                'target_path': target_path,
+                'source_name': os.path.basename(source_path),
+                'target_name': os.path.basename(target_path),
+                'source_content': source_content,
+                'target_content': target_content,
+                'jina_similarity': pair['jina_similarity']
+            })
+        except Exception as e:
+            print(f"  警告: 读取文件时发生错误: {e}")
+    
+    print(f"  需要评分的候选对数量: {len(pairs_to_score)}")
+    
+    # 分批处理评分
+    all_scores = []
+    
+    for batch_idx in range(0, len(pairs_to_score), ai_scoring_batch_size):
+        batch = pairs_to_score[batch_idx:batch_idx + ai_scoring_batch_size]
+        
+        print(f"  处理批次 {batch_idx // ai_scoring_batch_size + 1}/{(len(pairs_to_score) + ai_scoring_batch_size - 1) // ai_scoring_batch_size}，包含 {len(batch)} 个候选对...")
         
         try:
-            ai_result = call_ai_api_for_pair_relevance(
-                clean_source_body,
-                clean_target_body,
-                source_path,
-                target_path,
-                ai_api_key,
-                ai_provider,
-                ai_api_url,
-                ai_model_name,
+            data, headers, api_url = build_ai_batch_request(
+                ai_provider, 
+                ai_model_name, 
+                ai_api_key, 
+                batch,
                 max_content_length_for_ai_to_use
             )
             
-            if "ai_score" in ai_result and ai_result["ai_score"] != -1:
-                ai_score = ai_result["ai_score"]
-                ai_score_cache[pair_id] = ai_score
-                print(f"    AI评分成功: {ai_score}/10")
-            else:
-                print(f"    AI评分失败: {ai_result.get('error', '未知错误')}")
-        except Exception as e:
-            print(f"    AI打分异常: {e}")
-
-    print(f"\n保存AI评分结果到数据库...")
-    save_ai_scores_to_db(ai_score_cache, unique_pairs_for_ai, ai_scores_db_path)
-    
-    print(f"\nAI 打分完成。AI评分数据已保存到: {os.path.basename(ai_scores_db_path)}")
-
-def save_ai_scores_to_db(ai_score_cache: dict, unique_pairs_for_ai: dict, ai_scores_db_path: str):
-    """将AI评分结果保存到 ai_scores.db"""
-    conn = get_db_connection(ai_scores_db_path)
-    cursor = conn.cursor()
-    
-    try:
-        # 提取所有唯一文件路径
-        all_paths = set()
-        for pair_info in unique_pairs_for_ai.values():
-            all_paths.add(pair_info['source_path'])
-            all_paths.add(pair_info['target_path'])
-            
-        # 插入新的文件路径
-        cursor.executemany("INSERT OR IGNORE INTO file_paths (file_path) VALUES (?)", [(p,) for p in all_paths])
-        
-        # 创建路径到ID的映射
-        cursor.execute("SELECT id, file_path FROM file_paths")
-        path_to_id = {path: id for id, path in cursor.fetchall()}
-        
-        relationships_to_update = []
-        for pair_id, ai_score in ai_score_cache.items():
-            if pair_id in unique_pairs_for_ai:
-                pair_info = unique_pairs_for_ai[pair_id]
-                source_id = path_to_id.get(pair_info["source_path"])
-                target_id = path_to_id.get(pair_info["target_path"])
-                
-                if source_id is not None and target_id is not None:
-                    relationships_to_update.append((
-                        source_id,
-                        target_id,
-                        ai_score,
-                        round(pair_info["jina_similarity"], 6),
-                        datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                        pair_id,
-                        'full_path',
-                        datetime.datetime.now(datetime.timezone.utc).isoformat()
-                    ))
-
-        if relationships_to_update:
-            cursor.executemany(
-                """
-                INSERT OR REPLACE INTO ai_relationships 
-                (source_file_id, target_file_id, ai_score, jina_similarity, last_scored, relationship_key, key_type, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                relationships_to_update
+            batch_scores = call_ai_api_batch_for_relevance(
+                ai_provider,
+                ai_model_name,
+                ai_api_key,
+                api_url,
+                batch,
+                headers,
+                data
             )
-        
-        # 更新元数据
-        cursor.execute("UPDATE metadata SET value = ? WHERE key = 'last_updated'", (datetime.datetime.now(datetime.timezone.utc).isoformat(),))
-        cursor.execute("SELECT COUNT(*) FROM ai_relationships")
-        total_relationships = cursor.fetchone()[0]
-        cursor.execute("UPDATE metadata SET value = ? WHERE key = 'total_relationships'", (str(total_relationships),))
-
-        conn.commit()
-        print(f"✅ AI评分数据已保存: {len(relationships_to_update)} 个关系已更新/插入到数据库。")
             
-    except Exception as e:
-        conn.rollback()
-        print(f"❌ 保存AI评分数据到数据库失败: {e}")
-    finally:
-        conn.close()
-
-def load_ai_scores_from_db(ai_scores_db_path: str) -> dict:
-    """从 ai_scores.db 加载AI评分数据"""
-    ai_scores = {}
-    if not os.path.exists(ai_scores_db_path):
-        return ai_scores
+            all_scores.extend(batch_scores)
+        except Exception as e:
+            print(f"  批次处理中发生错误: {e}")
     
-    conn = get_db_connection(ai_scores_db_path)
-    cursor = conn.cursor()
+    print(f"  AI 评分完成，获得了 {len(all_scores)} 个评分结果")
     
-    try:
-        cursor.execute("SELECT relationship_key, ai_score FROM ai_relationships WHERE ai_score IS NOT NULL")
-        for row in cursor.fetchall():
-            ai_scores[row[0]] = row[1]
-        print(f"📖 从数据库加载了 {len(ai_scores)} 个AI评分记录")
-    except Exception as e:
-        print(f"⚠️ 加载AI评分数据库失败: {e}")
-    finally:
-        conn.close()
+    # 更新数据库
+    for result in all_scores:
+        source_path = result['source_path']
+        target_path = result['target_path']
+        ai_score = result['ai_score']
+        jina_similarity = result['jina_similarity']
         
-    return ai_scores
-
-# --- 数据迁移函数 ---
+        if source_path not in file_path_to_id or target_path not in file_path_to_id:
+            continue
+            
+        source_id = file_path_to_id[source_path]
+        target_id = file_path_to_id[target_path]
+        
+        # 生成一个唯一键，用于后续查询
+        relationship_key = f"{source_path}|{target_path}"
+        
+        # 更新或插入评分
+        cursor.execute("""
+            INSERT INTO ai_relationships 
+            (source_file_id, target_file_id, ai_score, jina_similarity, last_scored, relationship_key)
+            VALUES (?, ?, ?, ?, datetime('now'), ?)
+            ON CONFLICT (source_file_id, target_file_id) 
+            DO UPDATE SET 
+                ai_score = excluded.ai_score,
+                jina_similarity = excluded.jina_similarity,
+                last_scored = datetime('now'),
+                relationship_key = excluded.relationship_key
+        """, (source_id, target_id, ai_score, jina_similarity, relationship_key))
+    
+    conn.commit()
+    conn.close()
+        
+    print(f"  AI 评分更新完成，共更新 {len(all_scores)} 个关系。")
 
 def migrate_embeddings_json_to_sqlite(project_root_abs, output_dir_abs):
     """将 jina_embeddings.json 迁移到 jina_embeddings.db"""
@@ -996,6 +1476,159 @@ def migrate_ai_scores_json_to_sqlite(project_root_abs, output_dir_abs):
     conn.close()
     print(f"✅ Successfully migrated {len(ai_scores)} AI relationships to '{os.path.basename(db_path)}'.")
 
+def sqlite_to_json(db_path, json_output_path, output_dir_name=".jina-linker"):
+    """将SQLite数据库转换为JSON文件，用于与旧版插件兼容"""
+    print(f"📤 导出数据库到JSON: {os.path.basename(db_path)} → {os.path.basename(json_output_path)}")
+    
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        
+        # 获取元数据
+        metadata = {}
+        cursor.execute("SELECT key, value FROM metadata")
+        for key, value in cursor.fetchall():
+            metadata[key] = value
+        
+        # 获取所有文件路径
+        file_id_to_path = {}
+        cursor.execute("SELECT id, file_path FROM file_paths")
+        for row in cursor.fetchall():
+            file_id, file_path = row
+            file_id_to_path[file_id] = file_path
+        
+        # 获取所有关系
+        ai_scores = {}
+        cursor.execute("""
+            SELECT source_file_id, target_file_id, ai_score, jina_similarity, 
+                  last_scored, relationship_key, key_type
+            FROM ai_relationships
+        """)
+        
+        for row in cursor.fetchall():
+            source_id, target_id, ai_score, jina_similarity, last_scored, key, key_type = row
+            
+            # 使用relationship_key作为键，如果不存在则构建一个
+            if not key:
+                source_path = file_id_to_path.get(source_id)
+                target_path = file_id_to_path.get(target_id)
+                key = f"{source_path}|{target_path}"
+            
+            # 构建关系对象
+            ai_scores[key] = {
+                "source_path": file_id_to_path.get(source_id),
+                "target_path": file_id_to_path.get(target_id),
+                "ai_score": ai_score,
+                "jina_similarity": jina_similarity,
+                "last_scored": last_scored if last_scored else datetime.datetime.now().isoformat(),
+                "key_type": key_type if key_type else "full_path"
+            }
+        
+        # 构建完整的JSON对象
+        output_data = {
+            "_metadata": {
+                "description": "AI评分数据 (从SQLite导出)",
+                "last_updated": datetime.datetime.now().isoformat(),
+                "total_relationships": len(ai_scores),
+                "exported_from": os.path.basename(db_path),
+                "original_metadata": metadata
+            },
+            "ai_scores": ai_scores
+        }
+        
+        # 确保输出目录存在
+        os.makedirs(os.path.dirname(json_output_path), exist_ok=True)
+        
+        # 写入JSON文件
+        with open(json_output_path, 'w', encoding='utf-8') as f:
+            json.dump(output_data, f, ensure_ascii=False, indent=2)
+            
+        conn.close()
+        print(f"✅ 成功导出 {len(ai_scores)} 个AI关系到 '{os.path.basename(json_output_path)}'")
+        return True
+    
+    except Exception as e:
+        print(f"❌ 导出JSON时发生错误: {e}")
+        return False
+
+def export_embeddings_to_json(db_path, json_output_path):
+    """将嵌入数据库导出为JSON格式，用于与旧版插件兼容"""
+    print(f"📤 导出嵌入数据库到JSON: {os.path.basename(db_path)} → {os.path.basename(json_output_path)}")
+    
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        
+        # 获取元数据
+        metadata = {}
+        cursor.execute("SELECT key, value FROM metadata")
+        for key, value in cursor.fetchall():
+            metadata[key] = value
+        
+        # 获取嵌入数据
+        files_data = {}
+        cursor.execute("""
+            SELECT file_path, content_hash, embedding, processed_content, embedding_dimension
+            FROM file_embeddings
+        """)
+        
+        for row in cursor.fetchall():
+            file_path, content_hash, embedding_json, processed_content, dimension = row
+            
+            # 解析嵌入向量
+            embedding = json.loads(embedding_json) if embedding_json else None
+            
+            files_data[file_path] = {
+                "hash": content_hash,
+                "embedding": embedding,
+                "processed_content": processed_content
+            }
+        
+        # 构建完整的JSON对象
+        output_data = {
+            "_metadata": {
+                "generated_at_utc": metadata.get('created_at', datetime.datetime.now().isoformat()),
+                "jina_model_name": metadata.get('jina_model_name', 'unknown'),
+                "script_version": "2.0_plugin_compatible_json_export",
+                "exported_from": os.path.basename(db_path)
+            },
+            "files": files_data
+        }
+        
+        # 确保输出目录存在
+        os.makedirs(os.path.dirname(json_output_path), exist_ok=True)
+        
+        # 写入JSON文件
+        with open(json_output_path, 'w', encoding='utf-8') as f:
+            json.dump(output_data, f, ensure_ascii=False, indent=2)
+            
+        conn.close()
+        print(f"✅ 成功导出 {len(files_data)} 个文件嵌入到 '{os.path.basename(json_output_path)}'")
+        return True
+    
+    except Exception as e:
+        print(f"❌ 导出嵌入JSON时发生错误: {e}")
+        return False
+
+def export_data_to_json_format(project_root_abs, output_dir_abs, export_dir_name=".jina-linker"):
+    """导出AI评分数据为JSON格式，用于与旧版插件兼容"""
+    print("\n📦 正在将AI评分数据导出为JSON格式(用于旧版插件兼容)...")
+    
+    # 确定目标路径
+    json_dir = os.path.join(project_root_abs, export_dir_name)
+    os.makedirs(json_dir, exist_ok=True)
+    
+    # 导出AI评分数据
+    ai_scores_db = os.path.join(output_dir_abs, DEFAULT_AI_SCORES_FILE_NAME)
+    ai_scores_json = os.path.join(json_dir, "ai_scores.json")
+    
+    if os.path.exists(ai_scores_db):
+        sqlite_to_json(ai_scores_db, ai_scores_json, export_dir_name)
+    else:
+        print(f"⚠️ AI评分数据库不存在: {ai_scores_db}")
+    
+    print("📦 JSON导出完成!")
+
 def run_migration_process(project_root_abs, output_dir_abs):
     """主执行函数"""
     print("🚀 Starting JSON to SQLite migration...")
@@ -1103,6 +1736,12 @@ def main():
     parser.add_argument('--ai_scoring_mode', type=str, choices=['force', 'smart', 'skip'], default='smart', help='AI 评分模式')
     parser.add_argument('--hash_boundary_marker', type=str, default='<!-- HASH_BOUNDARY -->', help='哈希计算边界标记')
     parser.add_argument('--migrate', action='store_true', help='Run data migration from JSON to SQLite.')
+    parser.add_argument('--export_json', action='store_true', help='同时导出数据到JSON格式，用于旧版插件兼容')
+    parser.add_argument('--export_json_only', action='store_true', help='仅从数据库导出JSON，不执行其他操作')
+    parser.add_argument('--no_export_json', action='store_true', help='禁用自动JSON导出功能')
+    # 批处理参数
+    parser.add_argument('--embedding_batch_size', type=int, default=EMBEDDING_BATCH_SIZE, help='嵌入批处理大小，一次向Jina API发送的笔记数量')
+    parser.add_argument('--ai_scoring_batch_size', type=int, default=AI_SCORING_BATCH_SIZE, help='AI评分批处理大小，一次向AI API发送的笔记对数量')
 
     args = parser.parse_args()
     start_time = time.time()
@@ -1111,8 +1750,15 @@ def main():
     output_dir_abs = os.path.join(project_root_abs, args.output_dir)
     os.makedirs(output_dir_abs, exist_ok=True)
 
+    if args.export_json_only:
+        export_data_to_json_format(project_root_abs, output_dir_abs)
+        return
+
     if args.migrate:
         run_migration_process(project_root_abs, output_dir_abs)
+        # 自动导出为JSON(除非明确禁用)
+        if not args.no_export_json:
+            export_data_to_json_format(project_root_abs, output_dir_abs)
         return
 
     # 数据库路径
@@ -1155,7 +1801,8 @@ def main():
         embeddings_db_path,
         jina_api_key_to_use=args.jina_api_key,
         jina_model_name_to_use=args.jina_model_name,
-        max_chars_for_jina_to_use=args.max_chars_for_jina
+        max_chars_for_jina_to_use=args.max_chars_for_jina,
+        embedding_batch_size=args.embedding_batch_size
     )
     
     if not embeddings_data or not embeddings_data.get('files'):
@@ -1180,10 +1827,15 @@ def main():
             ai_api_key=args.ai_api_key,
             ai_model_name=args.ai_model_name,
             max_content_length_for_ai_to_use=args.max_content_length_for_ai,
-            force_rescore=(args.ai_scoring_mode == 'force')
+            force_rescore=(args.ai_scoring_mode == 'force'),
+            ai_scoring_batch_size=args.ai_scoring_batch_size
         )
     else:
         print(f"\n⏭️ 步骤 4：跳过 AI 评分。")
+    
+    # 自动导出为JSON(除非明确禁用或显式使用export_json参数)
+    if not args.no_export_json or args.export_json:
+        export_data_to_json_format(project_root_abs, output_dir_abs)
     
     end_time = time.time()
     print(f"\n✅ ===== 处理完成 =====")

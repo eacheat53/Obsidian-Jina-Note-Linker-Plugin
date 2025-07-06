@@ -4,19 +4,16 @@ import * as path from 'path'; // 导入 Node.js path 模块
 import * as crypto from 'crypto'; // 导入 Node.js crypto 模块用于哈希计算
 
 // --- 内部常量 ---
-// 已删除：AI_JUDGED_CANDIDATES_FM_KEY 常量，因为现在完全使用JSON文件存储AI评分数据
-// 新增：这两个常量用于保存原来的设置默认值，但不作为用户可配置项
-const DEFAULT_SCRIPT_PATH = '';
-const DEFAULT_OUTPUT_DIR_IN_VAULT = '.Jina-AI-Linker-Output';
-// 新增：将哈希边界标记设为内置常量
 const HASH_BOUNDARY_MARKER = '<!-- HASH_BOUNDARY -->';
 
 // 用于链接插入部分的常量
 const SUGGESTED_LINKS_TITLE = '## 建议链接';
 const LINKS_START_MARKER = '<!-- LINKS_START -->';
 const LINKS_END_MARKER = '<!-- LINKS_END -->';
-const UPDATE_PATHS_ONLY_ARG = '--update_paths_only';
 
+// 默认输出目录和嵌入文件名称
+const DEFAULT_OUTPUT_DIR_IN_VAULT = '.jina-linker';
+const EMBEDDINGS_FILE_NAME = 'embeddings.json';
 
 // AI 提供商类型
 type AIProvider = 'deepseek' | 'openai' | 'claude' | 'gemini' | 'custom';
@@ -34,7 +31,6 @@ interface AIModelConfig {
 interface JinaLinkerSettings {
     pythonPath: string;
     jinaApiKey: string;
-    // AI模型配置 - 支持多个AI提供商
     aiModels: {
         deepseek: AIModelConfig;
         openai: AIModelConfig;
@@ -46,13 +42,14 @@ interface JinaLinkerSettings {
     similarityThreshold: number;
     excludedFolders: string;
     excludedFilesPatterns: string;
+    defaultScanPath: string; // 新增：默认扫描路径
     jinaModelName: string;
     maxCharsForJina: number;
     maxContentLengthForAI: number;
     maxCandidatesPerSourceForAIScoring: number;
     minAiScoreForLinkInsertion: number;
     maxLinksToInsertPerNote: number;
-    dataMigrationCompleted: boolean; // Flag to check if migration to SQLite is done
+    dataMigrationCompleted: boolean;
 }
 
 // 类型定义优化
@@ -106,7 +103,6 @@ class PerformanceMonitor {
         const times = this.metrics.get(operation)!;
         times.push(duration);
         
-        // 保持最近100次记录
         if (times.length > 100) {
             times.shift();
         }
@@ -145,7 +141,6 @@ class FilePathUtils {
     }
     
     static validatePath(inputPath: string): boolean {
-        // 防止路径遍历攻击
         if (inputPath.includes('..') || inputPath.includes('~')) {
             return false;
         }
@@ -153,8 +148,7 @@ class FilePathUtils {
     }
     
     static sanitizePathForLog(inputPath: string): string {
-        // 隐藏敏感路径信息
-        return inputPath.replace(/\/Users\/[^\/]+/, '/Users/***');
+        return inputPath.replace(/\\Users\\[^\\]+/, '/Users/***');
     }
 }
 
@@ -206,16 +200,15 @@ const DEFAULT_SETTINGS: JinaLinkerSettings = {
     similarityThreshold: 0.70,
     excludedFolders: '.obsidian, Scripts, assets, Excalidraw, .trash, Python-Templater-Plugin-Output',
     excludedFilesPatterns: '*excalidraw*, template*.md, *.kanban.md, ^moc$, ^index$',
+    defaultScanPath: '/', // 新增
     jinaModelName: 'jina-embeddings-v3',
     maxCharsForJina: 8000,
     maxContentLengthForAI: 5000,
     maxCandidatesPerSourceForAIScoring: 20,
     minAiScoreForLinkInsertion: 6,
     maxLinksToInsertPerNote: 10,
-    dataMigrationCompleted: false // Default to false
+    dataMigrationCompleted: false
 };
-
-const EMBEDDINGS_FILE_NAME = "jina_embeddings.json";
 
 // Modal动态选项接口
 interface RunOptions {
@@ -226,15 +219,17 @@ interface RunOptions {
 class RunPluginModal extends Modal {
     plugin: JinaLinkerPlugin;
     onSubmit: (options: RunOptions) => void;
-    options: RunOptions = {
-        scanPath: '',
-        scoringMode: 'smart',
-    };
+    options: RunOptions;
 
     constructor(app: App, plugin: JinaLinkerPlugin, onSubmit: (options: RunOptions) => void) {
         super(app);
         this.plugin = plugin;
         this.onSubmit = onSubmit;
+        // 初始化时使用设置中的默认扫描路径
+        this.options = {
+            scanPath: this.plugin.settings.defaultScanPath,
+            scoringMode: 'smart',
+        };
     }
 
     onOpen() {
@@ -245,9 +240,9 @@ class RunPluginModal extends Modal {
 
         new Setting(contentEl)
             .setName('扫描目标文件夹 (可选)')
-            .setDesc('逗号分隔的仓库相对文件夹路径。请使用正斜杠 "/" 作为路径分隔符。输入“/”则扫描整个仓库 (会遵循全局排除设置)。例如：笔记/文件夹, 知识库/文章')
+            .setDesc('逗号分隔的仓库相对文件夹路径。使用 "/" 扫描整个仓库。会遵循全局排除设置。')
             .addText(text => text
-                .setPlaceholder('输入“/”扫描整个仓库，或例如：文件夹1/子文件夹, 文件夹2')
+                .setPlaceholder('例如：/, 文件夹1/子文件夹, 文件夹2')
                 .setValue(this.options.scanPath)
                 .onChange(value => {
                     this.options.scanPath = value.trim();
@@ -974,7 +969,7 @@ class PathSuggestModal extends FuzzySuggestModal<string> {
 
 export default class JinaLinkerPlugin extends Plugin {
     settings: JinaLinkerSettings;
-    performanceMonitor: PerformanceMonitor; // 改为public以便在设置页面访问
+    performanceMonitor: PerformanceMonitor;
     private fileContentCache = new Map<string, {content: string, mtime: number}>();
     private currentOperation: AbortController | null = null;
 
@@ -983,7 +978,6 @@ export default class JinaLinkerPlugin extends Plugin {
         await this.loadSettings();
         console.log('✅ 插件设置加载完成');
 
-        // Check for and run data migration if needed
         if (!this.settings.dataMigrationCompleted) {
             await this.runMigration();
         }
@@ -1093,20 +1087,6 @@ export default class JinaLinkerPlugin extends Plugin {
             });
 
             menu.addItem((item) => {
-                item.setTitle("更新 YAML 笔记路径")
-                   .setIcon("folder-symlink")
-                   .onClick(async () => {
-                        new Notice('JinaLinker: 开始执行 Python 脚本更新 YAML 路径...', 5000);
-                        const pythonSuccess = await this.runPythonScriptForPathUpdate();
-                        if (pythonSuccess.success) { // Check success property
-                            new Notice('JinaLinker: YAML 路径更新脚本执行完毕。', 5000);
-                        } else {
-                            new Notice('JinaLinker: YAML 路径更新脚本执行失败。', 0);
-                        }
-                   });
-            });
-
-            menu.addItem((item) => {
                 item.setTitle("批量添加哈希边界标记")
                    .setIcon("hash")
                    .onClick(() => {
@@ -1164,20 +1144,6 @@ export default class JinaLinkerPlugin extends Plugin {
         });
 
         this.addCommand({
-            id: 'update-yaml-note-paths',
-            name: '更新 YAML 笔记路径',
-            callback: async () => {
-                new Notice('JinaLinker: 开始执行 Python 脚本更新 YAML 路径...', 5000);
-                const result = await this.runPythonScriptForPathUpdate();
-                if (result.success) {
-                    new Notice('JinaLinker: YAML 路径更新脚本执行完毕。', 5000);
-                } else {
-                    new Notice('JinaLinker: YAML 路径更新脚本执行失败。', 0);
-                }
-            }
-        });
-
-        this.addCommand({
             id: 'add-hash-boundary-markers',
             name: '批量添加哈希边界标记',
             callback: () => {
@@ -1193,6 +1159,16 @@ export default class JinaLinkerPlugin extends Plugin {
                 }).open();
             }
         });
+        
+        // 添加测试命令（仅在开发模式下使用）
+        this.addCommand({
+            id: 'test-insert-links-into-body',
+            name: '测试：处理重复链接部分',
+            callback: () => {
+                console.log('🧪 用户启动：测试处理重复链接部分');
+                this.testInsertLinksIntoBody();
+            }
+        });
 
 
         this.addSettingTab(new JinaLinkerSettingTab(this.app, this));
@@ -1200,13 +1176,11 @@ export default class JinaLinkerPlugin extends Plugin {
     }
 
     onunload() {
-        // 清理资源
         this.cancelCurrentOperation();
         this.fileContentCache.clear();
         new Notice('Jina AI Linker 插件已卸载。');
     }
 
-    // 取消当前操作
     cancelCurrentOperation(): void {
         if (this.currentOperation) {
             this.currentOperation.abort();
@@ -1215,7 +1189,6 @@ export default class JinaLinkerPlugin extends Plugin {
         }
     }
 
-    // 清理缓存
     clearCache(): void {
         this.fileContentCache.clear();
         new Notice('🧹 缓存已清理', 2000);
@@ -1224,10 +1197,14 @@ export default class JinaLinkerPlugin extends Plugin {
     async loadSettings() {
         const loadedData = await this.loadData();
         
-        // 合并默认设置
+        // 清理旧的、无用的设置
+        if (loadedData) {
+            delete loadedData.outputDirInVault;
+            delete loadedData.aiJudgedCandidatesFmKey;
+        }
+
         this.settings = Object.assign({}, DEFAULT_SETTINGS, loadedData);
         
-        // 确保AI模型配置完整性
         if (!this.settings.aiModels) {
             this.settings.aiModels = { ...DEFAULT_AI_MODELS };
         } else {
@@ -1662,8 +1639,8 @@ export default class JinaLinkerPlugin extends Plugin {
                     } else {
                         new Notice(`⚠️ "${normalizedRelPathKey}" 不是Markdown文件或文件夹，跳过`);
                     }
-                }
-                
+}
+
                 // 去重
                 filesToProcess = Array.from(new Set(filesToProcess));
                 new Notice(`📁 将处理 ${filesToProcess.length} 个Markdown文件`);
@@ -1813,6 +1790,7 @@ export default class JinaLinkerPlugin extends Plugin {
                 '--max_candidates_per_source_for_ai_scoring', this.settings.maxCandidatesPerSourceForAIScoring.toString(),
                 '--hash_boundary_marker', HASH_BOUNDARY_MARKER.replace(/"/g, '\"'),
                 '--max_content_length_for_ai', this.settings.maxContentLengthForAI.toString(),
+                '--export_json' // 自动添加JSON导出参数，确保生成JSON文件供插件使用
             ];
             
             // 传递选中的AI模型配置
@@ -1924,7 +1902,7 @@ export default class JinaLinkerPlugin extends Plugin {
         return new Promise(async (resolve) => {
             let scriptToExecutePath = '';
             const vaultBasePath = (this.app.vault.adapter as any).getBasePath();
-            const bundledScriptName = 'jina_obsidian_processor.py';
+            const bundledScriptName = 'main.py';
     
             if (this.manifest.dir) {
                 scriptToExecutePath = path.join(vaultBasePath, this.manifest.dir || '', bundledScriptName);
@@ -1956,7 +1934,7 @@ export default class JinaLinkerPlugin extends Plugin {
                 scriptToExecutePath,
                 '--project_root', vaultBasePath,
                 '--output_dir', outputDirInVault,
-                UPDATE_PATHS_ONLY_ARG, // New argument to trigger path update mode
+                '--export_json' // 自动添加JSON导出参数，确保生成JSON文件供插件使用
             ];
 
             if (this.settings.excludedFolders) {
@@ -1973,8 +1951,16 @@ export default class JinaLinkerPlugin extends Plugin {
             
             const pythonProcess = spawn(this.settings.pythonPath, args, { stdio: ['pipe', 'pipe', 'pipe'] });
         
-            // let scriptOutput = ''; // Removed unused variable
-            // let scriptError = ''; // Removed unused variable
+            let scriptOutput = '';
+            let scriptError = '';
+            
+            pythonProcess.stdout.on('data', (data) => {
+                scriptOutput += data.toString();
+            });
+            
+            pythonProcess.stderr.on('data', (data) => {
+                scriptError += data.toString();
+            });
 
             pythonProcess.on('close', (code) => {
                 if (code === 0) {
@@ -1982,13 +1968,13 @@ export default class JinaLinkerPlugin extends Plugin {
                 } else {
                     const error = this.createProcessingError('UNKNOWN',
                         'Python 脚本执行失败',
-                        `退出码: ${code}, 错误输出: (output not captured)`); // Modified error message
+                        `退出码: ${code}, 错误输出: ${scriptError}`);
                     this.handleError(error);
                     resolve({ success: false, error });
                 }
             });
 
-            pythonProcess.on('error', (err: any) => { // Added type annotation for err
+            pythonProcess.on('error', (err: any) => { 
                 let error: ProcessingError;
                 if (err.message.includes('ENOENT')) {
                     error = this.createProcessingError('PYTHON_NOT_FOUND',
@@ -2031,7 +2017,7 @@ export default class JinaLinkerPlugin extends Plugin {
             
             try {
                 aiScoresData = JSON.parse(rawAiScoresData);
-            } catch (parseError: any) { // Added type annotation for parseError
+            } catch (parseError: any) {
                 const error = this.createProcessingError('UNKNOWN',
                     '解析AI评分数据文件失败',
                     parseError instanceof Error ? parseError.message : String(parseError));
@@ -2261,13 +2247,21 @@ export default class JinaLinkerPlugin extends Plugin {
         const contentBeforeBoundary = bodyContent.substring(0, boundaryIndex);
         let contentAfterBoundary = bodyContent.substring(boundaryIndex + boundaryMarker.length);
 
-        // 删除现有的建议链接部分
+        // 删除所有现有的建议链接部分
 
-        // 正则表达式匹配整个建议链接部分
-        const linkSectionRegex = new RegExp(`${escapeRegExp(SUGGESTED_LINKS_TITLE)}\s*${escapeRegExp(LINKS_START_MARKER)}[\s\S]*?${escapeRegExp(LINKS_END_MARKER)}`, "g");
+        // 正则表达式匹配整个建议链接部分，包括前后可能的空行
+        const linkSectionRegex = new RegExp(`\\s*${escapeRegExp(SUGGESTED_LINKS_TITLE)}\\s*${escapeRegExp(LINKS_START_MARKER)}[\\s\\S]*?${escapeRegExp(LINKS_END_MARKER)}\\s*`, "g");
         
-        // 清除现有的链接部分
-        contentAfterBoundary = contentAfterBoundary.replace(linkSectionRegex, '').trim();
+        // 清除所有现有的链接部分（可能有多个）
+        // 使用更可靠的方法替换所有匹配项
+        let prevContent = '';
+        // 循环替换直到内容不再变化
+        while (prevContent !== contentAfterBoundary) {
+            prevContent = contentAfterBoundary;
+            contentAfterBoundary = contentAfterBoundary.replace(linkSectionRegex, '');
+        }
+        
+        contentAfterBoundary = contentAfterBoundary.trim();
 
         // 构建最终内容
         let finalContent = contentBeforeBoundary + boundaryMarker;
@@ -2285,7 +2279,34 @@ export default class JinaLinkerPlugin extends Plugin {
         return finalContent;
     }
 
-    // 已删除：processFileForLinkInsertion() 函数，因为现在完全使用JSON文件存储AI评分数据
+    // 添加测试函数，用于验证insertLinksIntoBody函数是否能正确处理多个重复链接部分
+    async testInsertLinksIntoBody(): Promise<void> {
+        // 读取测试文件
+        const testFile = this.app.vault.getAbstractFileByPath('梦中画境.md');
+        if (!(testFile instanceof TFile)) {
+            new Notice('测试文件不存在');
+            return;
+        }
+        
+        // 获取文件内容
+        const fileContent = await this.app.vault.read(testFile);
+        
+        // 生成新的链接部分
+        const newLinksSection = `\n## 建议链接\n<!-- LINKS_START -->\n- [[梦是眼皮里的壁画]]\n- [[新的测试链接-${Date.now()}]]\n<!-- LINKS_END -->`;
+        
+        // 使用insertLinksIntoBody函数处理内容
+        const boundaryMarker = '<!-- HASH_BOUNDARY -->';
+        const processedContent = this.insertLinksIntoBody(fileContent, newLinksSection, boundaryMarker);
+        
+        // 检查处理后的内容是否只包含一个链接部分
+        const linkSectionCount = (processedContent.match(/## 建议链接/g) || []).length;
+        
+        // 将处理后的内容写回文件
+        await this.app.vault.modify(testFile, processedContent);
+        
+        // 检查结果
+        new Notice(`测试完成，文件中包含 ${linkSectionCount} 个链接部分，应该为1`);
+    }
 
     async runMigration(): Promise<void> {
         new Notice('Data migration to SQLite required. Starting process...', 0);
@@ -2300,9 +2321,8 @@ export default class JinaLinkerPlugin extends Plugin {
 
         return new Promise((resolve, reject) => {
             const vaultBasePath = (this.app.vault.adapter as any).getBasePath();
-            const scriptToExecutePath = path.join(vaultBasePath, this.manifest.dir || '', 'jina_obsidian_processor.py');
-            const outputDirInVault = this.manifest.dir; // 直接使用插件目录
-            
+            const scriptToExecutePath = path.join(vaultBasePath, this.manifest.dir || '', 'main.py');
+            const outputDirInVault = DEFAULT_OUTPUT_DIR_IN_VAULT; 
 
             const args = [
                 scriptToExecutePath,
@@ -2417,23 +2437,23 @@ class JinaLinkerSettingTab extends PluginSettingTab {
 
         // 显示选中AI提供商的配置
         this.displayAIProviderSettings(containerEl);
-        
+
         // Python 脚本处理参数
-        containerEl.createEl('div', { cls: 'jina-settings-section', text: '' }).innerHTML = '<div class="jina-settings-section-title">Python 脚本处理参数</div>';
+        containerEl.createEl('div', { cls: 'jina-settings-section', text: '' }).innerHTML = '<div class="jina-settings-section-title">处理参数</div>';
         
         new Setting(containerEl)
             .setClass('jina-settings-block')
-            .setName('排除的文件夹')
-            .setDesc('Python 脚本处理时要排除的文件夹名称 (逗号分隔，不区分大小写)。')
+            .setName('默认扫描路径')
+            .setDesc('运行插件时默认扫描的文件夹路径 (逗号分隔)。使用 "/" 表示整个仓库。')
             .addText(text => text
-                .setPlaceholder('例如：.archive, Temp, 附件')
-                .setValue(this.plugin.settings.excludedFolders)
+                .setPlaceholder('例如：/, 文件夹1, 文件夹2/子文件夹')
+                .setValue(this.plugin.settings.defaultScanPath)
                 .onChange(async (value) => {
-                    this.plugin.settings.excludedFolders = value;
+                    this.plugin.settings.defaultScanPath = value.trim() || DEFAULT_SETTINGS.defaultScanPath;
                     await this.plugin.saveSettings();
                 })
             );
-        
+
         new Setting(containerEl)
             .setClass('jina-settings-block')
             .setName('排除的文件模式')
