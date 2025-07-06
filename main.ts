@@ -4,7 +4,7 @@ import * as path from 'path'; // 导入 Node.js path 模块
 import * as crypto from 'crypto'; // 导入 Node.js crypto 模块用于哈希计算
 
 // --- 内部常量 ---
-const AI_JUDGED_CANDIDATES_FM_KEY = "ai_judged_candidates"; // 用于读取已有的AI评分数据（不再写入）
+// 已删除：AI_JUDGED_CANDIDATES_FM_KEY 常量，因为现在完全使用JSON文件存储AI评分数据
 // 新增：这两个常量用于保存原来的设置默认值，但不作为用户可配置项
 const DEFAULT_SCRIPT_PATH = '';
 const DEFAULT_OUTPUT_DIR_IN_VAULT = '.Jina-AI-Linker-Output';
@@ -977,13 +977,18 @@ export default class JinaLinkerPlugin extends Plugin {
     private currentOperation: AbortController | null = null;
 
     async onload() {
+        console.log('🚀 Jina AI Linker 插件开始加载...');
         await this.loadSettings();
+        console.log('✅ 插件设置加载完成');
         this.performanceMonitor = new PerformanceMonitor();
+        console.log('✅ 性能监控器初始化完成');
+        console.log('🎉 Jina AI Linker 插件加载完成！');
 
         this.addCommand({
             id: 'run-jina-linker-processing-and-insert-links',
             name: '处理笔记并插入建议链接',
             callback: () => {
+                console.log('📝 用户启动：处理笔记并插入建议链接功能');
                 new RunPluginModal(this.app, this, async (options) => {
                     const progressModal = new ProgressModal(this.app, 'Jina AI Linker 处理进度', () => {
                         this.currentOperation?.abort();
@@ -1116,6 +1121,7 @@ export default class JinaLinkerPlugin extends Plugin {
             id: 'calculate-note-content-hash',
             name: '计算笔记内容哈希值 (诊断用)',
             callback: () => {
+                console.log('🔢 用户启动：计算笔记内容哈希值功能');
                 new CalculateHashModal(this.app, this, async (filePath) => {
                     const normalizedFilePath = normalizePath(filePath);
                     const tFile = this.app.vault.getAbstractFileByPath(normalizedFilePath);
@@ -1137,6 +1143,7 @@ export default class JinaLinkerPlugin extends Plugin {
             id: 'update-hashes-in-embeddings-file',
             name: '更新嵌入数据中的笔记哈希值',
             callback: () => {
+                console.log('🔄 用户启动：更新嵌入数据中的笔记哈希值功能');
                 new UpdateHashesModal(this.app, this, async (filePathsStr) => {
                     const relativePaths = filePathsStr.split(',').map(p => p.trim()).filter(p => p);
                     if (relativePaths.length === 0) {
@@ -1166,6 +1173,7 @@ export default class JinaLinkerPlugin extends Plugin {
             id: 'add-hash-boundary-markers',
             name: '批量添加哈希边界标记',
             callback: () => {
+                console.log('🏷️ 用户启动：批量添加哈希边界标记功能');
                 new AddHashBoundaryModal(this.app, this, async (targetPaths) => {
                     const result = await this.addHashBoundaryMarkers(targetPaths);
                     if (result.success) {
@@ -1609,6 +1617,8 @@ export default class JinaLinkerPlugin extends Plugin {
 
     // 批量添加哈希边界标记
     async addHashBoundaryMarkers(targetRelativePaths: string): Promise<OperationResult<{processedFiles: number, updatedFiles: number}>> {
+        console.log('🏷️ 开始执行：批量添加哈希边界标记');
+        console.log(`📂 目标路径: ${targetRelativePaths}`);
         const endTimer = this.performanceMonitor.startTimer('addHashBoundaryMarkers');
         
         try {
@@ -1733,6 +1743,9 @@ export default class JinaLinkerPlugin extends Plugin {
     }
 
     async runPythonScript(scanPathFromModal: string, scoringModeFromModal: "force" | "smart" | "skip"): Promise<OperationResult<boolean>> {
+        console.log('🐍 开始执行：Python脚本处理');
+        console.log(`📂 扫描路径: ${scanPathFromModal}`);
+        console.log(`🤖 AI评分模式: ${scoringModeFromModal}`);
         const endTimer = this.performanceMonitor.startTimer('runPythonScript');
         
         try {
@@ -1824,24 +1837,27 @@ export default class JinaLinkerPlugin extends Plugin {
                 new Notice('🚀 JinaLinker: 开始执行 Python 脚本...', 5000);
                 // const sanitizedArgs = this.sanitizeArgsForLog(args); // Removed unused variable
             
+                this.log('info', `执行 Python 命令: ${this.settings.pythonPath} ${this.sanitizeArgsForLog(args).join(' ')}`);
                 const pythonProcess = spawn(this.settings.pythonPath, args, { 
                     stdio: ['pipe', 'pipe', 'pipe'],
                     signal: this.currentOperation?.signal
                 });
             
-                // let scriptOutput = ''; // Removed unused variable
-                // let scriptError = ''; // Removed unused variable
+                let scriptOutput = '';
+                let scriptError = '';
 
                 pythonProcess.stdout.on('data', (data) => {
                     if (this.currentOperation?.signal.aborted) return;
-                    // const outputChunk = data.toString(); // Removed unused variable
-                    // scriptOutput += outputChunk; // Removed unused variable
+                    const outputChunk = data.toString();
+                    scriptOutput += outputChunk;
+                    this.log('info', `Python stdout: ${outputChunk.trim()}`); // Log stdout
                 });
 
                 pythonProcess.stderr.on('data', (data) => {
                     if (this.currentOperation?.signal.aborted) return;
-                    // const errorChunk = data.toString(); // Removed unused variable
-                    // scriptError += errorChunk; // Removed unused variable
+                    const errorChunk = data.toString();
+                    scriptError += errorChunk;
+                    this.log('error', `Python stderr: ${errorChunk.trim()}`); // Log stderr
                 });
 
                 pythonProcess.on('close', (code) => {
@@ -1850,17 +1866,18 @@ export default class JinaLinkerPlugin extends Plugin {
                     
                     if (code === 0) {
                         new Notice('✅ Python 脚本执行成功', 3000);
+                        this.log('info', 'Python 脚本执行成功', scriptOutput);
                         resolve({ success: true, data: true });
                     } else {
                         const error = this.createProcessingError('UNKNOWN', 
                             'Python 脚本执行失败', 
-                            `退出码: ${code}, 错误输出: (output not captured)`); // Modified error message
+                            `退出码: ${code}, 错误输出: ${scriptError}`);
                         this.handleError(error);
                         resolve({ success: false, error });
                     }
                 });
 
-                pythonProcess.on('error', (err: any) => { // Added type annotation for err
+                pythonProcess.on('error', (err: any) => {
                     endTimer();
                     this.currentOperation = null;
                     
@@ -1981,6 +1998,8 @@ export default class JinaLinkerPlugin extends Plugin {
     }
 
     async insertAISuggestedLinksIntoNotes(targetFoldersOption: string): Promise<OperationResult<{processedFiles: number, updatedFiles: number}>> {
+        console.log('🔗 开始执行：插入AI建议链接');
+        console.log(`📂 目标文件夹: ${targetFoldersOption}`);
         const endTimer = this.performanceMonitor.startTimer('insertAISuggestedLinksIntoNotes');
         
         try {
@@ -2258,167 +2277,7 @@ export default class JinaLinkerPlugin extends Plugin {
         return finalContent;
     }
 
-    // 性能优化：单个文件处理逻辑提取（保留原有的从frontmatter读取的方法）
-    private async processFileForLinkInsertion(
-        file: TFile, 
-        targetFolderPaths: string[], 
-        shouldProcessAll: boolean
-    ): Promise<{processed: boolean, updated: boolean} | null> {
-        try {
-            // 检查文件是否在目标文件夹中
-            let inTargetFolder = shouldProcessAll;
-            if (!shouldProcessAll) {
-                for (const targetFolder of targetFolderPaths) {
-                    const normalizedTarget = targetFolder.endsWith('/') ? targetFolder.slice(0, -1) : targetFolder;
-                    const filePathNormalized = file.path;
-                    if (filePathNormalized.startsWith(normalizedTarget + '/') || filePathNormalized === normalizedTarget) {
-                        inTargetFolder = true; 
-                        break;
-                    }
-                }
-            }
-            
-            if (!inTargetFolder) {
-                return null;
-            }
-
-            // 使用缓存读取文件内容
-            let fileContent = await this.getCachedFileContent(file);
-            const originalFileContentForComparison = fileContent; 
-
-            // 分离frontmatter和正文
-            const fmRegex = /^---\s*$\n([\s\S]*?)\n^---\s*$\n?/m;
-            const fmMatch = fileContent.match(fmRegex);
-            let bodyContent = fileContent;
-            let frontmatterPart = '';
-
-            if (fmMatch) {
-                frontmatterPart = fmMatch[0];
-                bodyContent = fileContent.substring(frontmatterPart.length);
-            }
-            
-            // 检查哈希边界标记，若没有则添加
-            const boundaryMarker = HASH_BOUNDARY_MARKER;
-            let boundaryIndexInBody = bodyContent.indexOf(boundaryMarker);
-            
-            // 如果没有哈希边界标记，则在正文末尾添加
-            if (boundaryIndexInBody === -1) {
-                // 找到最后一个非空行
-                const lines = bodyContent.split(/\r?\n/);
-                let lastNonEmptyLineIndex = -1;
-                
-                for (let i = lines.length - 1; i >= 0; i--) {
-                    if (lines[i].trim().length > 0) {
-                        lastNonEmptyLineIndex = i;
-                        break;
-                    }
-                }
-                
-                if (lastNonEmptyLineIndex !== -1) {
-                    // 在最后一个非空行后插入哈希边界标记
-                    lines.splice(lastNonEmptyLineIndex + 1, 0, boundaryMarker);
-                    bodyContent = lines.join('\n');
-                    boundaryIndexInBody = bodyContent.indexOf(boundaryMarker);
-                    this.log('info', `在 ${file.path} 添加了哈希边界标记`);
-                } else {
-                    this.log('warn', `${file.path} 没有任何非空行，跳过`);
-                    return { processed: false, updated: false };
-                }
-            }
-                    
-            // 分离哈希边界标记前后的内容
-            const contentBeforeBoundary = bodyContent.substring(0, boundaryIndexInBody);
-            let contentAfterBoundary = bodyContent.substring(boundaryIndexInBody + boundaryMarker.length);
-            
-            // 删除现有的所有建议链接部分（可能有多个）
-            const sectionTitle = SUGGESTED_LINKS_TITLE;
-            const startMarker = LINKS_START_MARKER;
-            const endMarker = LINKS_END_MARKER;
-            
-            // 正则表达式匹配整个建议链接部分，包括可能包含的div标签
-            const linkSectionRegexWithDiv = new RegExp(`<div[^>]*>\\s*${escapeRegExp(sectionTitle)}\\s*${escapeRegExp(startMarker)}[\\s\\S]*?${escapeRegExp(endMarker)}\\s*<\\/div>`, "g");
-            const linkSectionRegexSimple = new RegExp(`${escapeRegExp(sectionTitle)}\\s*${escapeRegExp(startMarker)}[\\s\\S]*?${escapeRegExp(endMarker)}`, "g");
-            
-            // 清除所有匹配的链接部分
-            contentAfterBoundary = contentAfterBoundary
-                .replace(linkSectionRegexWithDiv, '')
-                .replace(linkSectionRegexSimple, '');
-            
-            // 获取候选链接
-            const fileCache = this.app.metadataCache.getFileCache(file);
-            const frontmatter = fileCache?.frontmatter;
-            const candidates: any[] = (frontmatter && frontmatter[AI_JUDGED_CANDIDATES_FM_KEY] && Array.isArray(frontmatter[AI_JUDGED_CANDIDATES_FM_KEY])) ? frontmatter[AI_JUDGED_CANDIDATES_FM_KEY] : [];
-            const linksToInsert: string[] = [];
-
-            // 按分数排序
-            candidates.sort((a: any, b: any) => {
-                const scoreA = a.aiScore !== undefined ? a.aiScore : -Infinity;
-                const scoreB = b.aiScore !== undefined ? b.aiScore : -Infinity;
-                if (scoreB !== scoreA) return scoreB - scoreA;
-                return (b.jinaScore || 0) - (a.jinaScore || 0);
-            });
-
-            // 筛选要插入的链接
-            for (const cand of candidates) {
-                if (linksToInsert.length >= this.settings.maxLinksToInsertPerNote) break;
-                
-                if (cand && typeof cand === 'object' && cand.targetPath) {
-                    if (cand.aiScore === undefined || cand.aiScore < this.settings.minAiScoreForLinkInsertion) {
-                        continue; 
-                    }
-                    
-                    const targetTFile = this.app.vault.getAbstractFileByPath(cand.targetPath);
-                    if (targetTFile instanceof TFile) {
-                        const linkText = this.app.metadataCache.fileToLinktext(targetTFile, file.path, true);
-                        linksToInsert.push(`- [[${linkText}]]`);
-                    } else {
-                        console.warn(`JinaLinker: 目标文件 ${cand.targetPath} 在为 ${file.path} 生成链接时未找到。跳过此链接。`);
-                    }
-                }
-            }
-
-            // 清理可能存在的多余空行
-            contentAfterBoundary = contentAfterBoundary.trim();
-            
-            // 构建最终内容
-            let finalContent = '';
-            
-            // 添加frontmatter
-            if (frontmatterPart) {
-                finalContent += frontmatterPart;
-            }
-            
-            // 添加正文和哈希边界标记
-            finalContent += contentBeforeBoundary + boundaryMarker;
-            
-            // 添加换行和建议链接部分（如果有链接）
-            if (linksToInsert.length > 0) {
-                const linksMarkdown = linksToInsert.join('\n');
-                finalContent += `\n${sectionTitle}\n${startMarker}\n${linksMarkdown}\n${endMarker}`;
-                
-                // 如果有剩余内容，添加到最后
-                if (contentAfterBoundary.length > 0) {
-                    finalContent += `\n\n${contentAfterBoundary}`;
-                }
-            } else if (contentAfterBoundary.length > 0) {
-                // 如果没有链接但有其他内容，保留其他内容
-                finalContent += `\n\n${contentAfterBoundary}`;
-            }
-
-            // 检查内容是否有变化，有则更新文件
-            if (finalContent !== originalFileContentForComparison) {
-                await this.app.vault.modify(file, finalContent);
-                this.log('info', `已更新 ${file.path} 中的链接`);
-                return { processed: true, updated: true };
-            }
-
-            return { processed: true, updated: false };
-
-        } catch (error: any) {
-            this.log('error', `处理文件 ${file.path} 的链接插入时发生错误`, error);
-            throw error; // 重新抛出错误，让上层处理
-        }
-    }
+    // 已删除：processFileForLinkInsertion() 函数，因为现在完全使用JSON文件存储AI评分数据
 }
 
 // Helper function for regex escaping

@@ -954,6 +954,7 @@ DEFAULT_CANDIDATES_FILE_NAME = "jina_candidate_pairs.json"
 DEFAULT_SIMILARITY_THRESHOLD = 0.70
 
 def main():
+    print("🚀 Jina AI 处理工具启动")
     parser = argparse.ArgumentParser(description="Jina AI 处理工具 - 处理笔记内容并提取嵌入。")
     parser.add_argument('--project_root', type=str, required=True, help='项目根目录的绝对路径')
     parser.add_argument('--output_dir', type=str, default='.Jina-AI-Linker-Output', help='输出文件的目录路径（相对于项目根目录）')
@@ -1020,10 +1021,10 @@ def main():
             scan_target_folder_rel = "multiple folders"
     
     print(f"===== Jina处理启动 =====")
-    print(f"- 扫描目标: {scan_target_folder_rel}")
-    print(f"- 输出目录: {output_dir_in_vault}")
-    print(f"- Jina模型: {args.jina_model_name}")
-    print(f"- 相似度阈值: {args.similarity_threshold}")
+    print(f"📂 扫描目标: {scan_target_folder_rel}")
+    print(f"📁 输出目录: {output_dir_in_vault}")
+    print(f"🤖 Jina模型: {args.jina_model_name}")
+    print(f"🎯 相似度阈值: {args.similarity_threshold}")
     if args.max_candidates_per_source_for_ai_scoring > 0:
         print(f"- 每源笔记的最大AI评分候选数: {args.max_candidates_per_source_for_ai_scoring}")
     if args.ai_api_key:
@@ -1035,7 +1036,7 @@ def main():
         print("- AI评分: 未提供 AI API 密钥，跳过 AI 评分")
     
     # 扫描并列出符合条件的 markdown 文件
-    print(f"\n步骤 1：扫描 Markdown 文件...")
+    print(f"\n📝 步骤 1：扫描 Markdown 文件...")
     if scan_target_folder_rel == "multiple folders":
         # 如果指定了多个扫描文件夹，先扫描全部
         all_markdown_files = list_markdown_files(
@@ -1075,7 +1076,7 @@ def main():
     print(f"  找到 {len(markdown_files_to_process)} 个 Markdown 文件。")
     
     # 步骤2：使用 Jina AI 处理笔记并生成嵌入
-    print(f"\n步骤 2：处理笔记并生成嵌入...")
+    print(f"\n🧠 步骤 2：处理笔记并生成嵌入...")
     embeddings_data = process_and_embed_notes(
         project_root_abs,
         markdown_files_to_process,
@@ -1090,7 +1091,7 @@ def main():
         return
     
     # 步骤3：生成候选链接对
-    print(f"\n步骤 3：根据相似度阈值 {args.similarity_threshold} 生成候选链接对...")
+    print(f"\n🔗 步骤 3：根据相似度阈值 {args.similarity_threshold} 生成候选链接对...")
     candidate_pairs = generate_candidate_pairs(embeddings_data, args.similarity_threshold)
     
     print(f"  共生成 {len(candidate_pairs)} 个候选链接对。")
@@ -1115,7 +1116,7 @@ def main():
             'skip': '跳过评分'
         }.get(args.ai_scoring_mode, '智能评分')
         
-        print(f"\n步骤 4：使用 {ai_provider_name} AI 对候选链接进行{scoring_mode_text}...")
+        print(f"\n🤖 步骤 4：使用 {ai_provider_name} AI 对候选链接进行{scoring_mode_text}...")
         
         force_rescore = args.ai_scoring_mode == 'force'
         score_candidates_and_update_frontmatter(
@@ -1132,20 +1133,20 @@ def main():
         )
     else:
         if args.ai_api_key:
-            print(f"\n步骤 4：跳过 AI 评分 (评分模式: {args.ai_scoring_mode})")
+            print(f"\n⏭️ 步骤 4：跳过 AI 评分 (评分模式: {args.ai_scoring_mode})")
         else:
-            print(f"\n步骤 4：跳过 AI 评分 (未提供 {args.ai_provider or 'AI'} API 密钥)")
+            print(f"\n⏭️ 步骤 4：跳过 AI 评分 (未提供 {args.ai_provider or 'AI'} API 密钥)")
     
     # 打印总结信息
     end_time = time.time()
     total_files_processed = len(embeddings_data.get('files', {}))
     total_time = end_time - start_time
     
-    print(f"\n===== 处理完成 =====")
-    print(f"- 成功处理文件: {total_files_processed} 个")
-    print(f"- 生成候选链接对: {len(candidate_pairs)} 个")
-    print(f"- 总耗时: {total_time:.2f} 秒")
-    print(f"- 嵌入数据保存至: {embeddings_file_path}")
+    print(f"\n✅ ===== 处理完成 =====")
+    print(f"📊 成功处理文件: {total_files_processed} 个")
+    print(f"🔗 生成候选链接对: {len(candidate_pairs)} 个")
+    print(f"⏱️ 总耗时: {total_time:.2f} 秒")
+    print(f"💾 嵌入数据保存至: {embeddings_file_path}")
 
 if __name__ == "__main__":
     main()

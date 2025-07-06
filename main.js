@@ -41,7 +41,6 @@ var import_obsidian = require("obsidian");
 var import_child_process = require("child_process");
 var path = __toESM(require("path"));
 var crypto = __toESM(require("crypto"));
-var AI_JUDGED_CANDIDATES_FM_KEY = "ai_judged_candidates";
 var DEFAULT_OUTPUT_DIR_IN_VAULT = ".Jina-AI-Linker-Output";
 var HASH_BOUNDARY_MARKER = "<!-- HASH_BOUNDARY -->";
 var SUGGESTED_LINKS_TITLE = "## \u5EFA\u8BAE\u94FE\u63A5";
@@ -710,12 +709,17 @@ var JinaLinkerPlugin = class extends import_obsidian.Plugin {
     this.currentOperation = null;
   }
   async onload() {
+    console.log("\u{1F680} Jina AI Linker \u63D2\u4EF6\u5F00\u59CB\u52A0\u8F7D...");
     await this.loadSettings();
+    console.log("\u2705 \u63D2\u4EF6\u8BBE\u7F6E\u52A0\u8F7D\u5B8C\u6210");
     this.performanceMonitor = new PerformanceMonitor();
+    console.log("\u2705 \u6027\u80FD\u76D1\u63A7\u5668\u521D\u59CB\u5316\u5B8C\u6210");
+    console.log("\u{1F389} Jina AI Linker \u63D2\u4EF6\u52A0\u8F7D\u5B8C\u6210\uFF01");
     this.addCommand({
       id: "run-jina-linker-processing-and-insert-links",
       name: "\u5904\u7406\u7B14\u8BB0\u5E76\u63D2\u5165\u5EFA\u8BAE\u94FE\u63A5",
       callback: () => {
+        console.log("\u{1F4DD} \u7528\u6237\u542F\u52A8\uFF1A\u5904\u7406\u7B14\u8BB0\u5E76\u63D2\u5165\u5EFA\u8BAE\u94FE\u63A5\u529F\u80FD");
         new RunPluginModal(this.app, this, async (options) => {
           const progressModal = new ProgressModal(this.app, "Jina AI Linker \u5904\u7406\u8FDB\u5EA6", () => {
             var _a;
@@ -820,6 +824,7 @@ var JinaLinkerPlugin = class extends import_obsidian.Plugin {
       id: "calculate-note-content-hash",
       name: "\u8BA1\u7B97\u7B14\u8BB0\u5185\u5BB9\u54C8\u5E0C\u503C (\u8BCA\u65AD\u7528)",
       callback: () => {
+        console.log("\u{1F522} \u7528\u6237\u542F\u52A8\uFF1A\u8BA1\u7B97\u7B14\u8BB0\u5185\u5BB9\u54C8\u5E0C\u503C\u529F\u80FD");
         new CalculateHashModal(this.app, this, async (filePath) => {
           const normalizedFilePath = (0, import_obsidian.normalizePath)(filePath);
           const tFile = this.app.vault.getAbstractFileByPath(normalizedFilePath);
@@ -838,6 +843,7 @@ var JinaLinkerPlugin = class extends import_obsidian.Plugin {
       id: "update-hashes-in-embeddings-file",
       name: "\u66F4\u65B0\u5D4C\u5165\u6570\u636E\u4E2D\u7684\u7B14\u8BB0\u54C8\u5E0C\u503C",
       callback: () => {
+        console.log("\u{1F504} \u7528\u6237\u542F\u52A8\uFF1A\u66F4\u65B0\u5D4C\u5165\u6570\u636E\u4E2D\u7684\u7B14\u8BB0\u54C8\u5E0C\u503C\u529F\u80FD");
         new UpdateHashesModal(this.app, this, async (filePathsStr) => {
           const relativePaths = filePathsStr.split(",").map((p) => p.trim()).filter((p) => p);
           if (relativePaths.length === 0) {
@@ -865,6 +871,7 @@ var JinaLinkerPlugin = class extends import_obsidian.Plugin {
       id: "add-hash-boundary-markers",
       name: "\u6279\u91CF\u6DFB\u52A0\u54C8\u5E0C\u8FB9\u754C\u6807\u8BB0",
       callback: () => {
+        console.log("\u{1F3F7}\uFE0F \u7528\u6237\u542F\u52A8\uFF1A\u6279\u91CF\u6DFB\u52A0\u54C8\u5E0C\u8FB9\u754C\u6807\u8BB0\u529F\u80FD");
         new AddHashBoundaryModal(this.app, this, async (targetPaths) => {
           const result = await this.addHashBoundaryMarkers(targetPaths);
           if (result.success) {
@@ -1209,6 +1216,8 @@ ${fileContent}`;
   }
   // 批量添加哈希边界标记
   async addHashBoundaryMarkers(targetRelativePaths) {
+    console.log("\u{1F3F7}\uFE0F \u5F00\u59CB\u6267\u884C\uFF1A\u6279\u91CF\u6DFB\u52A0\u54C8\u5E0C\u8FB9\u754C\u6807\u8BB0");
+    console.log(`\u{1F4C2} \u76EE\u6807\u8DEF\u5F84: ${targetRelativePaths}`);
     const endTimer = this.performanceMonitor.startTimer("addHashBoundaryMarkers");
     try {
       new import_obsidian.Notice(`\u{1F504} \u5F00\u59CB\u6279\u91CF\u6DFB\u52A0\u54C8\u5E0C\u8FB9\u754C\u6807\u8BB0...`);
@@ -1297,6 +1306,9 @@ ${fileContent}`;
     }
   }
   async runPythonScript(scanPathFromModal, scoringModeFromModal) {
+    console.log("\u{1F40D} \u5F00\u59CB\u6267\u884C\uFF1APython\u811A\u672C\u5904\u7406");
+    console.log(`\u{1F4C2} \u626B\u63CF\u8DEF\u5F84: ${scanPathFromModal}`);
+    console.log(`\u{1F916} AI\u8BC4\u5206\u6A21\u5F0F: ${scoringModeFromModal}`);
     const endTimer = this.performanceMonitor.startTimer("runPythonScript");
     try {
       const validationErrors = this.validateSettings();
@@ -1381,31 +1393,41 @@ ${fileContent}`;
           args = args.concat(patterns);
         }
         new import_obsidian.Notice("\u{1F680} JinaLinker: \u5F00\u59CB\u6267\u884C Python \u811A\u672C...", 5e3);
+        this.log("info", `\u6267\u884C Python \u547D\u4EE4: ${this.settings.pythonPath} ${this.sanitizeArgsForLog(args).join(" ")}`);
         const pythonProcess = (0, import_child_process.spawn)(this.settings.pythonPath, args, {
           stdio: ["pipe", "pipe", "pipe"],
           signal: (_a = this.currentOperation) == null ? void 0 : _a.signal
         });
+        let scriptOutput = "";
+        let scriptError = "";
         pythonProcess.stdout.on("data", (data) => {
           var _a2;
           if ((_a2 = this.currentOperation) == null ? void 0 : _a2.signal.aborted)
             return;
+          const outputChunk = data.toString();
+          scriptOutput += outputChunk;
+          this.log("info", `Python stdout: ${outputChunk.trim()}`);
         });
         pythonProcess.stderr.on("data", (data) => {
           var _a2;
           if ((_a2 = this.currentOperation) == null ? void 0 : _a2.signal.aborted)
             return;
+          const errorChunk = data.toString();
+          scriptError += errorChunk;
+          this.log("error", `Python stderr: ${errorChunk.trim()}`);
         });
         pythonProcess.on("close", (code) => {
           endTimer();
           this.currentOperation = null;
           if (code === 0) {
             new import_obsidian.Notice("\u2705 Python \u811A\u672C\u6267\u884C\u6210\u529F", 3e3);
+            this.log("info", "Python \u811A\u672C\u6267\u884C\u6210\u529F", scriptOutput);
             resolve({ success: true, data: true });
           } else {
             const error = this.createProcessingError(
               "UNKNOWN",
               "Python \u811A\u672C\u6267\u884C\u5931\u8D25",
-              `\u9000\u51FA\u7801: ${code}, \u9519\u8BEF\u8F93\u51FA: (output not captured)`
+              `\u9000\u51FA\u7801: ${code}, \u9519\u8BEF\u8F93\u51FA: ${scriptError}`
             );
             this.handleError(error);
             resolve({ success: false, error });
@@ -1531,6 +1553,8 @@ ${fileContent}`;
     });
   }
   async insertAISuggestedLinksIntoNotes(targetFoldersOption) {
+    console.log("\u{1F517} \u5F00\u59CB\u6267\u884C\uFF1A\u63D2\u5165AI\u5EFA\u8BAE\u94FE\u63A5");
+    console.log(`\u{1F4C2} \u76EE\u6807\u6587\u4EF6\u5939: ${targetFoldersOption}`);
     const endTimer = this.performanceMonitor.startTimer("insertAISuggestedLinksIntoNotes");
     try {
       const outputDirInVault = DEFAULT_OUTPUT_DIR_IN_VAULT;
@@ -1744,123 +1768,7 @@ ${contentAfterBoundary}`;
     }
     return finalContent;
   }
-  // 性能优化：单个文件处理逻辑提取（保留原有的从frontmatter读取的方法）
-  async processFileForLinkInsertion(file, targetFolderPaths, shouldProcessAll) {
-    try {
-      let inTargetFolder = shouldProcessAll;
-      if (!shouldProcessAll) {
-        for (const targetFolder of targetFolderPaths) {
-          const normalizedTarget = targetFolder.endsWith("/") ? targetFolder.slice(0, -1) : targetFolder;
-          const filePathNormalized = file.path;
-          if (filePathNormalized.startsWith(normalizedTarget + "/") || filePathNormalized === normalizedTarget) {
-            inTargetFolder = true;
-            break;
-          }
-        }
-      }
-      if (!inTargetFolder) {
-        return null;
-      }
-      let fileContent = await this.getCachedFileContent(file);
-      const originalFileContentForComparison = fileContent;
-      const fmRegex = /^---\s*$\n([\s\S]*?)\n^---\s*$\n?/m;
-      const fmMatch = fileContent.match(fmRegex);
-      let bodyContent = fileContent;
-      let frontmatterPart = "";
-      if (fmMatch) {
-        frontmatterPart = fmMatch[0];
-        bodyContent = fileContent.substring(frontmatterPart.length);
-      }
-      const boundaryMarker = HASH_BOUNDARY_MARKER;
-      let boundaryIndexInBody = bodyContent.indexOf(boundaryMarker);
-      if (boundaryIndexInBody === -1) {
-        const lines = bodyContent.split(/\r?\n/);
-        let lastNonEmptyLineIndex = -1;
-        for (let i = lines.length - 1; i >= 0; i--) {
-          if (lines[i].trim().length > 0) {
-            lastNonEmptyLineIndex = i;
-            break;
-          }
-        }
-        if (lastNonEmptyLineIndex !== -1) {
-          lines.splice(lastNonEmptyLineIndex + 1, 0, boundaryMarker);
-          bodyContent = lines.join("\n");
-          boundaryIndexInBody = bodyContent.indexOf(boundaryMarker);
-          this.log("info", `\u5728 ${file.path} \u6DFB\u52A0\u4E86\u54C8\u5E0C\u8FB9\u754C\u6807\u8BB0`);
-        } else {
-          this.log("warn", `${file.path} \u6CA1\u6709\u4EFB\u4F55\u975E\u7A7A\u884C\uFF0C\u8DF3\u8FC7`);
-          return { processed: false, updated: false };
-        }
-      }
-      const contentBeforeBoundary = bodyContent.substring(0, boundaryIndexInBody);
-      let contentAfterBoundary = bodyContent.substring(boundaryIndexInBody + boundaryMarker.length);
-      const sectionTitle = SUGGESTED_LINKS_TITLE;
-      const startMarker = LINKS_START_MARKER;
-      const endMarker = LINKS_END_MARKER;
-      const linkSectionRegexWithDiv = new RegExp(`<div[^>]*>\\s*${escapeRegExp(sectionTitle)}\\s*${escapeRegExp(startMarker)}[\\s\\S]*?${escapeRegExp(endMarker)}\\s*<\\/div>`, "g");
-      const linkSectionRegexSimple = new RegExp(`${escapeRegExp(sectionTitle)}\\s*${escapeRegExp(startMarker)}[\\s\\S]*?${escapeRegExp(endMarker)}`, "g");
-      contentAfterBoundary = contentAfterBoundary.replace(linkSectionRegexWithDiv, "").replace(linkSectionRegexSimple, "");
-      const fileCache = this.app.metadataCache.getFileCache(file);
-      const frontmatter = fileCache == null ? void 0 : fileCache.frontmatter;
-      const candidates = frontmatter && frontmatter[AI_JUDGED_CANDIDATES_FM_KEY] && Array.isArray(frontmatter[AI_JUDGED_CANDIDATES_FM_KEY]) ? frontmatter[AI_JUDGED_CANDIDATES_FM_KEY] : [];
-      const linksToInsert = [];
-      candidates.sort((a, b) => {
-        const scoreA = a.aiScore !== void 0 ? a.aiScore : -Infinity;
-        const scoreB = b.aiScore !== void 0 ? b.aiScore : -Infinity;
-        if (scoreB !== scoreA)
-          return scoreB - scoreA;
-        return (b.jinaScore || 0) - (a.jinaScore || 0);
-      });
-      for (const cand of candidates) {
-        if (linksToInsert.length >= this.settings.maxLinksToInsertPerNote)
-          break;
-        if (cand && typeof cand === "object" && cand.targetPath) {
-          if (cand.aiScore === void 0 || cand.aiScore < this.settings.minAiScoreForLinkInsertion) {
-            continue;
-          }
-          const targetTFile = this.app.vault.getAbstractFileByPath(cand.targetPath);
-          if (targetTFile instanceof import_obsidian.TFile) {
-            const linkText = this.app.metadataCache.fileToLinktext(targetTFile, file.path, true);
-            linksToInsert.push(`- [[${linkText}]]`);
-          } else {
-            console.warn(`JinaLinker: \u76EE\u6807\u6587\u4EF6 ${cand.targetPath} \u5728\u4E3A ${file.path} \u751F\u6210\u94FE\u63A5\u65F6\u672A\u627E\u5230\u3002\u8DF3\u8FC7\u6B64\u94FE\u63A5\u3002`);
-          }
-        }
-      }
-      contentAfterBoundary = contentAfterBoundary.trim();
-      let finalContent = "";
-      if (frontmatterPart) {
-        finalContent += frontmatterPart;
-      }
-      finalContent += contentBeforeBoundary + boundaryMarker;
-      if (linksToInsert.length > 0) {
-        const linksMarkdown = linksToInsert.join("\n");
-        finalContent += `
-${sectionTitle}
-${startMarker}
-${linksMarkdown}
-${endMarker}`;
-        if (contentAfterBoundary.length > 0) {
-          finalContent += `
-
-${contentAfterBoundary}`;
-        }
-      } else if (contentAfterBoundary.length > 0) {
-        finalContent += `
-
-${contentAfterBoundary}`;
-      }
-      if (finalContent !== originalFileContentForComparison) {
-        await this.app.vault.modify(file, finalContent);
-        this.log("info", `\u5DF2\u66F4\u65B0 ${file.path} \u4E2D\u7684\u94FE\u63A5`);
-        return { processed: true, updated: true };
-      }
-      return { processed: true, updated: false };
-    } catch (error) {
-      this.log("error", `\u5904\u7406\u6587\u4EF6 ${file.path} \u7684\u94FE\u63A5\u63D2\u5165\u65F6\u53D1\u751F\u9519\u8BEF`, error);
-      throw error;
-    }
-  }
+  // 已删除：processFileForLinkInsertion() 函数，因为现在完全使用JSON文件存储AI评分数据
 };
 function escapeRegExp(string) {
   return string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
