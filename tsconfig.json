@@ -17,10 +17,10 @@
         "ES6",
         "ES7",
         "ES2021"
-      ]
+      ],
+      "types": ["node", "sqlite3"]
     },
     "include": [
       "**/*.ts"
     ]
   }
-  

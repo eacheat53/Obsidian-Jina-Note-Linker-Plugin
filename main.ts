@@ -52,6 +52,7 @@ interface JinaLinkerSettings {
     maxCandidatesPerSourceForAIScoring: number;
     minAiScoreForLinkInsertion: number;
     maxLinksToInsertPerNote: number;
+    dataMigrationCompleted: boolean; // Flag to check if migration to SQLite is done
 }
 
 // 类型定义优化
@@ -210,7 +211,8 @@ const DEFAULT_SETTINGS: JinaLinkerSettings = {
     maxContentLengthForAI: 5000,
     maxCandidatesPerSourceForAIScoring: 20,
     minAiScoreForLinkInsertion: 6,
-    maxLinksToInsertPerNote: 10
+    maxLinksToInsertPerNote: 10,
+    dataMigrationCompleted: false // Default to false
 };
 
 const EMBEDDINGS_FILE_NAME = "jina_embeddings.json";
@@ -980,6 +982,12 @@ export default class JinaLinkerPlugin extends Plugin {
         console.log('🚀 Jina AI Linker 插件开始加载...');
         await this.loadSettings();
         console.log('✅ 插件设置加载完成');
+
+        // Check for and run data migration if needed
+        if (!this.settings.dataMigrationCompleted) {
+            await this.runMigration();
+        }
+
         this.performanceMonitor = new PerformanceMonitor();
         console.log('✅ 性能监控器初始化完成');
         console.log('🎉 Jina AI Linker 插件加载完成！');
@@ -1230,8 +1238,8 @@ export default class JinaLinkerPlugin extends Plugin {
                 } else {
                     // 确保每个AI模型配置都有完整的字段
                     this.settings.aiModels[provider] = Object.assign(
-                        {}, 
-                        DEFAULT_AI_MODELS[provider], 
+                        {},
+                        DEFAULT_AI_MODELS[provider],
                         this.settings.aiModels[provider]
                     );
                 }
@@ -1454,7 +1462,7 @@ export default class JinaLinkerPlugin extends Plugin {
                 
                 // 添加到处理列表
                 filesToProcess = [...filesToProcess, ...folderFiles];
-            } 
+            }
             // 如果是文件且是Markdown文件，直接添加到处理列表
             else if (abstractFile instanceof TFile && abstractFile.extension === 'md') {
                 filesToProcess.push(abstractFile);
@@ -1527,11 +1535,11 @@ export default class JinaLinkerPlugin extends Plugin {
                         if (oldHash !== newHash) {
                             // 需要更新jina_hash
                             const newFrontmatter = frontmatterContent.replace(
-                                jinaHashRegex, 
+                                jinaHashRegex,
                                 `jina_hash: ${newHash}`
                             );
                             newContent = fileContent.replace(
-                                fmMatch[0], 
+                                fmMatch[0],
                                 `---\n${newFrontmatter}\n---\n`
                             );
                             frontmatterUpdated = true;
@@ -1542,7 +1550,7 @@ export default class JinaLinkerPlugin extends Plugin {
                         // 无jina_hash，添加到frontmatter末尾
                         const newFrontmatter = frontmatterContent + `\njina_hash: ${newHash}`;
                         newContent = fileContent.replace(
-                            fmMatch[0], 
+                            fmMatch[0],
                             `---\n${newFrontmatter}\n---\n`
                         );
                         frontmatterUpdated = true;
@@ -1592,7 +1600,7 @@ export default class JinaLinkerPlugin extends Plugin {
         
         let detailedSummary = `哈希更新摘要: ${updatedJsonCount} 个JSON已更新, ${updatedFrontmatterCount} 个frontmatter已更新, ${noChangeCount} 个无需更改, ${notFoundInJsonCount} 个在JSON中未找到, ${hashCalculationFailedCount} 个哈希计算失败。`;
         if (notFoundInJsonCount > 0 || hashCalculationFailedCount > 0) {
-            new Notice(detailedSummary, 7000); 
+            new Notice(detailedSummary, 7000);
         }
     }
     
@@ -1762,7 +1770,7 @@ export default class JinaLinkerPlugin extends Plugin {
             return new Promise(async (resolve) => {
                 let scriptToExecutePath = '';
                 const vaultBasePath = (this.app.vault.adapter as any).getBasePath();
-                const bundledScriptName = 'jina_obsidian_processor.py';
+                const bundledScriptName = 'main.py';
         
                 // 默认使用插件自带脚本，不再考虑用户设置的scriptPath
                 if (this.manifest.dir) {
@@ -1794,7 +1802,7 @@ export default class JinaLinkerPlugin extends Plugin {
                 }
 
             let args = [
-                scriptToExecutePath, 
+                scriptToExecutePath,
                 '--project_root', vaultBasePath,
                 '--output_dir', outputDirInVault,
                 '--jina_api_key', this.settings.jinaApiKey,
@@ -1803,7 +1811,7 @@ export default class JinaLinkerPlugin extends Plugin {
                 '--jina_model_name', this.settings.jinaModelName,
                 '--max_chars_for_jina', this.settings.maxCharsForJina.toString(),
                 '--max_candidates_per_source_for_ai_scoring', this.settings.maxCandidatesPerSourceForAIScoring.toString(),
-                '--hash_boundary_marker', HASH_BOUNDARY_MARKER.replace(/"/g, '\\"'),
+                '--hash_boundary_marker', HASH_BOUNDARY_MARKER.replace(/"/g, '\"'),
                 '--max_content_length_for_ai', this.settings.maxContentLengthForAI.toString(),
             ];
             
@@ -1838,7 +1846,7 @@ export default class JinaLinkerPlugin extends Plugin {
                 // const sanitizedArgs = this.sanitizeArgsForLog(args); // Removed unused variable
             
                 this.log('info', `执行 Python 命令: ${this.settings.pythonPath} ${this.sanitizeArgsForLog(args).join(' ')}`);
-                const pythonProcess = spawn(this.settings.pythonPath, args, { 
+                const pythonProcess = spawn(this.settings.pythonPath, args, {
                     stdio: ['pipe', 'pipe', 'pipe'],
                     signal: this.currentOperation?.signal
                 });
@@ -1869,8 +1877,8 @@ export default class JinaLinkerPlugin extends Plugin {
                         this.log('info', 'Python 脚本执行成功', scriptOutput);
                         resolve({ success: true, data: true });
                     } else {
-                        const error = this.createProcessingError('UNKNOWN', 
-                            'Python 脚本执行失败', 
+                        const error = this.createProcessingError('UNKNOWN',
+                            'Python 脚本执行失败',
                             `退出码: ${code}, 错误输出: ${scriptError}`);
                         this.handleError(error);
                         resolve({ success: false, error });
@@ -1883,12 +1891,12 @@ export default class JinaLinkerPlugin extends Plugin {
                     
                     let error: ProcessingError;
                     if (err.message.includes('ENOENT')) {
-                        error = this.createProcessingError('PYTHON_NOT_FOUND', 
-                            '找不到Python解释器', 
+                        error = this.createProcessingError('PYTHON_NOT_FOUND',
+                            '找不到Python解释器',
                             err.message);
                     } else {
-                        error = this.createProcessingError('UNKNOWN', 
-                            '启动 Python 脚本失败', 
+                        error = this.createProcessingError('UNKNOWN',
+                            '启动 Python 脚本失败',
                             err.message);
                     }
                     
@@ -1905,8 +1913,8 @@ export default class JinaLinkerPlugin extends Plugin {
             });
         } catch (error: any) {
             endTimer();
-            const processingError = this.createProcessingError('UNKNOWN', 
-                '执行Python脚本时发生未知错误', 
+            const processingError = this.createProcessingError('UNKNOWN',
+                '执行Python脚本时发生未知错误',
                 error instanceof Error ? error.message : String(error));
             return { success: false, error: processingError };
         }
@@ -1919,7 +1927,7 @@ export default class JinaLinkerPlugin extends Plugin {
             const bundledScriptName = 'jina_obsidian_processor.py';
     
             if (this.manifest.dir) {
-                scriptToExecutePath = path.join(vaultBasePath, this.manifest.dir, bundledScriptName);
+                scriptToExecutePath = path.join(vaultBasePath, this.manifest.dir || '', bundledScriptName);
             } else {
                 const error = this.createProcessingError('FILE_NOT_FOUND', 'Python 脚本路径无法确定');
                 this.handleError(error);
@@ -1945,7 +1953,7 @@ export default class JinaLinkerPlugin extends Plugin {
             }
 
             let args = [
-                scriptToExecutePath, 
+                scriptToExecutePath,
                 '--project_root', vaultBasePath,
                 '--output_dir', outputDirInVault,
                 UPDATE_PATHS_ONLY_ARG, // New argument to trigger path update mode
@@ -1972,8 +1980,8 @@ export default class JinaLinkerPlugin extends Plugin {
                 if (code === 0) {
                     resolve({ success: true, data: true });
                 } else {
-                    const error = this.createProcessingError('UNKNOWN', 
-                        'Python 脚本执行失败', 
+                    const error = this.createProcessingError('UNKNOWN',
+                        'Python 脚本执行失败',
                         `退出码: ${code}, 错误输出: (output not captured)`); // Modified error message
                     this.handleError(error);
                     resolve({ success: false, error });
@@ -1983,12 +1991,12 @@ export default class JinaLinkerPlugin extends Plugin {
             pythonProcess.on('error', (err: any) => { // Added type annotation for err
                 let error: ProcessingError;
                 if (err.message.includes('ENOENT')) {
-                    error = this.createProcessingError('PYTHON_NOT_FOUND', 
-                        '找不到Python解释器', 
+                    error = this.createProcessingError('PYTHON_NOT_FOUND',
+                        '找不到Python解释器',
                         err.message);
                 } else {
-                    error = this.createProcessingError('UNKNOWN', 
-                        '启动 Python 脚本失败', 
+                    error = this.createProcessingError('UNKNOWN',
+                        '启动 Python 脚本失败',
                         err.message);
                 }
                 this.handleError(error);
@@ -2010,8 +2018,8 @@ export default class JinaLinkerPlugin extends Plugin {
             // 检查AI评分文件是否存在
             const aiScoresFileExists = await this.app.vault.adapter.exists(aiScoresFilePath);
             if (!aiScoresFileExists) {
-                const error = this.createProcessingError('FILE_NOT_FOUND', 
-                    `AI评分文件 "${aiScoresFilePath}" 未找到`, 
+                const error = this.createProcessingError('FILE_NOT_FOUND',
+                    `AI评分文件 "${aiScoresFilePath}" 未找到`,
                     '请先运行Python脚本生成AI评分数据');
                 this.handleError(error);
                 return { success: false, error };
@@ -2024,8 +2032,8 @@ export default class JinaLinkerPlugin extends Plugin {
             try {
                 aiScoresData = JSON.parse(rawAiScoresData);
             } catch (parseError: any) { // Added type annotation for parseError
-                const error = this.createProcessingError('UNKNOWN', 
-                    '解析AI评分数据文件失败', 
+                const error = this.createProcessingError('UNKNOWN',
+                    '解析AI评分数据文件失败',
                     parseError instanceof Error ? parseError.message : String(parseError));
                 this.handleError(error);
                 return { success: false, error };
@@ -2089,8 +2097,8 @@ export default class JinaLinkerPlugin extends Plugin {
 
     // 新增：从JSON文件读取AI评分数据的文件处理逻辑
     private async processFileForLinkInsertionFromJSON(
-        file: TFile, 
-        targetFolderPaths: string[], 
+        file: TFile,
+        targetFolderPaths: string[],
         shouldProcessAll: boolean,
         aiScoresData: any
     ): Promise<{processed: boolean, updated: boolean} | null> {
@@ -2102,7 +2110,7 @@ export default class JinaLinkerPlugin extends Plugin {
                     const normalizedTarget = targetFolder.endsWith('/') ? targetFolder.slice(0, -1) : targetFolder;
                     const filePathNormalized = file.path;
                     if (filePathNormalized.startsWith(normalizedTarget + '/') || filePathNormalized === normalizedTarget) {
-                        inTargetFolder = true; 
+                        inTargetFolder = true;
                         break;
                     }
                 }
@@ -2120,7 +2128,7 @@ export default class JinaLinkerPlugin extends Plugin {
 
             // 使用缓存读取文件内容
             let fileContent = await this.getCachedFileContent(file);
-            const originalFileContentForComparison = fileContent; 
+            const originalFileContentForComparison = fileContent;
 
             // 分离frontmatter和正文
             const fmRegex = /^---\s*$\n([\s\S]*?)\n^---\s*$\n?/m;
@@ -2256,7 +2264,7 @@ export default class JinaLinkerPlugin extends Plugin {
         // 删除现有的建议链接部分
 
         // 正则表达式匹配整个建议链接部分
-        const linkSectionRegex = new RegExp(`${escapeRegExp(SUGGESTED_LINKS_TITLE)}\\s*${escapeRegExp(LINKS_START_MARKER)}[\\s\\S]*?${escapeRegExp(LINKS_END_MARKER)}`, "g");
+        const linkSectionRegex = new RegExp(`${escapeRegExp(SUGGESTED_LINKS_TITLE)}\s*${escapeRegExp(LINKS_START_MARKER)}[\s\S]*?${escapeRegExp(LINKS_END_MARKER)}`, "g");
         
         // 清除现有的链接部分
         contentAfterBoundary = contentAfterBoundary.replace(linkSectionRegex, '').trim();
@@ -2278,11 +2286,67 @@ export default class JinaLinkerPlugin extends Plugin {
     }
 
     // 已删除：processFileForLinkInsertion() 函数，因为现在完全使用JSON文件存储AI评分数据
+
+    async runMigration(): Promise<void> {
+        new Notice('Data migration to SQLite required. Starting process...', 0);
+        console.log('Data migration to SQLite required. Starting process...');
+
+        if (!this.manifest.dir) {
+            const errorMsg = 'Plugin directory not found. Cannot run migration.';
+            console.error(errorMsg);
+            new Notice(errorMsg, 0);
+            return Promise.reject(new Error(errorMsg));
+        }
+
+        return new Promise((resolve, reject) => {
+            const vaultBasePath = (this.app.vault.adapter as any).getBasePath();
+            const scriptToExecutePath = path.join(vaultBasePath, this.manifest.dir || '', 'jina_obsidian_processor.py');
+            const outputDirInVault = this.manifest.dir; // 直接使用插件目录
+            
+
+            const args = [
+                scriptToExecutePath,
+                '--project_root', vaultBasePath,
+                '--output_dir', outputDirInVault,
+                '--migrate'
+            ];
+
+            const pythonProcess = spawn(this.settings.pythonPath, args);
+
+            pythonProcess.stdout.on('data', (data) => {
+                console.log(`Migration script stdout: ${data}`);
+            });
+
+            pythonProcess.stderr.on('data', (data) => {
+                console.error(`Migration script stderr: ${data}`);
+            });
+
+            pythonProcess.on('close', async (code) => {
+                if (code === 0) {
+                    new Notice('✅ Data migration to SQLite completed successfully!');
+                    console.log('✅ Data migration to SQLite completed successfully!');
+                    this.settings.dataMigrationCompleted = true;
+                    await this.saveSettings();
+                    resolve();
+                } else {
+                    new Notice(`❌ Data migration failed with code ${code}. Check console for details.`, 0);
+                    console.error(`Data migration failed with code ${code}.`);
+                    reject(new Error(`Migration failed with code ${code}`));
+                }
+            });
+
+            pythonProcess.on('error', (err) => {
+                new Notice('❌ Failed to start migration script. Check console for details.', 0);
+                console.error('Failed to start migration script:', err);
+                reject(err);
+            });
+        });
+    }
 }
 
 // Helper function for regex escaping
 function escapeRegExp(string: string): string {
-    return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return string.replace(/[.*+?^${}()|[\]\\]/g, '\$&');
 }
 
 class JinaLinkerSettingTab extends PluginSettingTab {
@@ -2365,7 +2429,7 @@ class JinaLinkerSettingTab extends PluginSettingTab {
                 .setPlaceholder('例如：.archive, Temp, 附件')
                 .setValue(this.plugin.settings.excludedFolders)
                 .onChange(async (value) => {
-                    this.plugin.settings.excludedFolders = value; 
+                    this.plugin.settings.excludedFolders = value;
                     await this.plugin.saveSettings();
                 })
             );
@@ -2378,7 +2442,7 @@ class JinaLinkerSettingTab extends PluginSettingTab {
                 .setPlaceholder('例如：*.excalidraw, draft-*.md, ZK_*')
                 .setValue(this.plugin.settings.excludedFilesPatterns)
                 .onChange(async (value) => {
-                    this.plugin.settings.excludedFilesPatterns = value; 
+                    this.plugin.settings.excludedFilesPatterns = value;
                     await this.plugin.saveSettings();
                 })
             );
@@ -2389,14 +2453,14 @@ class JinaLinkerSettingTab extends PluginSettingTab {
             .setDesc('Jina 嵌入向量之间计算余弦相似度的最小阈值 (0.0 到 1.0)，低于此阈值的笔记对将不被视为候选链接。')
             .addText(text => text
                 .setValue(this.plugin.settings.similarityThreshold.toString())
-                .onChange(async (value) => { 
-                    const num = parseFloat(value); 
-                    if (!isNaN(num) && num >= 0 && num >= 0 && num <= 1) { // Fixed: Changed second num >= 0 to num <= 1
-                        this.plugin.settings.similarityThreshold = num; 
+                .onChange(async (value) => {
+                    const num = parseFloat(value);
+                    if (!isNaN(num) && num >= 0 && num <= 1) {
+                        this.plugin.settings.similarityThreshold = num;
                     } else {
-                        new Notice("相似度阈值必须是 0.0 到 1.0 之间的数字。"); 
+                        new Notice("相似度阈值必须是 0.0 到 1.0 之间的数字。");
                     }
-                    await this.plugin.saveSettings(); 
+                    await this.plugin.saveSettings();
                 })
             );
         
@@ -2408,10 +2472,10 @@ class JinaLinkerSettingTab extends PluginSettingTab {
             .setName('Jina 模型名称')
             .setDesc('用于生成嵌入的 Jina 模型名称。')
             .addText(text => text
-                .setPlaceholder(DEFAULT_SETTINGS.jinaModelName)
+                .setPlaceholder(String(DEFAULT_SETTINGS.jinaModelName))
                 .setValue(this.plugin.settings.jinaModelName)
                 .onChange(async (value) => {
-                    this.plugin.settings.jinaModelName = value.trim() || DEFAULT_SETTINGS.jinaModelName; 
+                    this.plugin.settings.jinaModelName = value.trim() || DEFAULT_SETTINGS.jinaModelName;
                     await this.plugin.saveSettings();
                 })
             );
@@ -2424,7 +2488,7 @@ class JinaLinkerSettingTab extends PluginSettingTab {
                 .setPlaceholder(String(DEFAULT_SETTINGS.maxCharsForJina))
                 .setValue(this.plugin.settings.maxCharsForJina.toString())
                 .onChange(async (value) => {
-                    this.plugin.settings.maxCharsForJina = parseInt(value) || DEFAULT_SETTINGS.maxCharsForJina; 
+                    this.plugin.settings.maxCharsForJina = parseInt(value) || DEFAULT_SETTINGS.maxCharsForJina;
                     await this.plugin.saveSettings();
                 })
             );
@@ -2438,7 +2502,7 @@ class JinaLinkerSettingTab extends PluginSettingTab {
                 .setPlaceholder(String(DEFAULT_SETTINGS.maxContentLengthForAI))
                 .setValue(this.plugin.settings.maxContentLengthForAI.toString())
                 .onChange(async (value) => {
-                    this.plugin.settings.maxContentLengthForAI = parseInt(value) || DEFAULT_SETTINGS.maxContentLengthForAI; 
+                    this.plugin.settings.maxContentLengthForAI = parseInt(value) || DEFAULT_SETTINGS.maxContentLengthForAI;
                     await this.plugin.saveSettings();
                 })
             );
@@ -2451,7 +2515,7 @@ class JinaLinkerSettingTab extends PluginSettingTab {
                 .setPlaceholder(String(DEFAULT_SETTINGS.maxCandidatesPerSourceForAIScoring))
                 .setValue(this.plugin.settings.maxCandidatesPerSourceForAIScoring.toString())
                 .onChange(async (value) => {
-                    this.plugin.settings.maxCandidatesPerSourceForAIScoring = parseInt(value) || DEFAULT_SETTINGS.maxCandidatesPerSourceForAIScoring; 
+                    this.plugin.settings.maxCandidatesPerSourceForAIScoring = parseInt(value) || DEFAULT_SETTINGS.maxCandidatesPerSourceForAIScoring;
                     await this.plugin.saveSettings();
                 })
             );
@@ -2467,7 +2531,7 @@ class JinaLinkerSettingTab extends PluginSettingTab {
                 .setPlaceholder(String(DEFAULT_SETTINGS.minAiScoreForLinkInsertion))
                 .setValue(this.plugin.settings.minAiScoreForLinkInsertion.toString())
                 .onChange(async (value) => {
-                    this.plugin.settings.minAiScoreForLinkInsertion = parseInt(value) || DEFAULT_SETTINGS.minAiScoreForLinkInsertion; 
+                    this.plugin.settings.minAiScoreForLinkInsertion = parseInt(value) || DEFAULT_SETTINGS.minAiScoreForLinkInsertion;
                     await this.plugin.saveSettings();
                 })
             );
@@ -2480,7 +2544,7 @@ class JinaLinkerSettingTab extends PluginSettingTab {
                 .setPlaceholder(String(DEFAULT_SETTINGS.maxLinksToInsertPerNote))
                 .setValue(this.plugin.settings.maxLinksToInsertPerNote.toString())
                 .onChange(async (value) => {
-                    this.plugin.settings.maxLinksToInsertPerNote = parseInt(value) || DEFAULT_SETTINGS.maxLinksToInsertPerNote; 
+                    this.plugin.settings.maxLinksToInsertPerNote = parseInt(value) || DEFAULT_SETTINGS.maxLinksToInsertPerNote;
                     await this.plugin.saveSettings();
                 })
             );
@@ -2612,9 +2676,9 @@ class JinaLinkerSettingTab extends PluginSettingTab {
         if (suggestions.length === 0) return;
 
         const suggestionEl = containerEl.createEl('div', { cls: 'jina-model-suggestions' });
-        suggestionEl.createEl('div', { 
-            text: '常用模型：', 
-            cls: 'jina-suggestion-title' 
+        suggestionEl.createEl('div', {
+            text: '常用模型：',
+            cls: 'jina-suggestion-title'
         });
         
         const buttonContainer = suggestionEl.createEl('div', { cls: 'jina-suggestion-buttons' });
@@ -2669,7 +2733,7 @@ class JinaLinkerSettingTab extends PluginSettingTab {
         const suggestions = {
             'deepseek': ['deepseek-chat', 'deepseek-coder'],
             'openai': ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo'],
-            'claude': ['claude-3-5-sonnet-20241022', 'claude-3-haiku-20240307', 'claude-3-sonnet-20240229'],
+            'claude': ['claude-3-5-sonnet-20240620', 'claude-3-haiku-20240307', 'claude-3-sonnet-20240229'],
             'gemini': ['gemini-1.5-pro', 'gemini-1.5-flash', 'gemini-1.0-pro'],
             'custom': []
         };

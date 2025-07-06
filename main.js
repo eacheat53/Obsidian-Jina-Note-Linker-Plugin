@@ -155,7 +155,9 @@ var DEFAULT_SETTINGS = {
   maxContentLengthForAI: 5e3,
   maxCandidatesPerSourceForAIScoring: 20,
   minAiScoreForLinkInsertion: 6,
-  maxLinksToInsertPerNote: 10
+  maxLinksToInsertPerNote: 10,
+  dataMigrationCompleted: false
+  // Default to false
 };
 var EMBEDDINGS_FILE_NAME = "jina_embeddings.json";
 var RunPluginModal = class extends import_obsidian.Modal {
@@ -712,6 +714,9 @@ var JinaLinkerPlugin = class extends import_obsidian.Plugin {
     console.log("\u{1F680} Jina AI Linker \u63D2\u4EF6\u5F00\u59CB\u52A0\u8F7D...");
     await this.loadSettings();
     console.log("\u2705 \u63D2\u4EF6\u8BBE\u7F6E\u52A0\u8F7D\u5B8C\u6210");
+    if (!this.settings.dataMigrationCompleted) {
+      await this.runMigration();
+    }
     this.performanceMonitor = new PerformanceMonitor();
     console.log("\u2705 \u6027\u80FD\u76D1\u63A7\u5668\u521D\u59CB\u5316\u5B8C\u6210");
     console.log("\u{1F389} Jina AI Linker \u63D2\u4EF6\u52A0\u8F7D\u5B8C\u6210\uFF01");
@@ -1366,7 +1371,7 @@ ${fileContent}`;
           "--max_candidates_per_source_for_ai_scoring",
           this.settings.maxCandidatesPerSourceForAIScoring.toString(),
           "--hash_boundary_marker",
-          HASH_BOUNDARY_MARKER.replace(/"/g, '\\"'),
+          HASH_BOUNDARY_MARKER.replace(/"/g, '"'),
           "--max_content_length_for_ai",
           this.settings.maxContentLengthForAI.toString()
         ];
@@ -1475,7 +1480,7 @@ ${fileContent}`;
       const vaultBasePath = this.app.vault.adapter.getBasePath();
       const bundledScriptName = "jina_obsidian_processor.py";
       if (this.manifest.dir) {
-        scriptToExecutePath = path.join(vaultBasePath, this.manifest.dir, bundledScriptName);
+        scriptToExecutePath = path.join(vaultBasePath, this.manifest.dir || "", bundledScriptName);
       } else {
         const error = this.createProcessingError("FILE_NOT_FOUND", "Python \u811A\u672C\u8DEF\u5F84\u65E0\u6CD5\u786E\u5B9A");
         this.handleError(error);
@@ -1755,7 +1760,7 @@ ${LINKS_END_MARKER}`;
     }
     const contentBeforeBoundary = bodyContent.substring(0, boundaryIndex);
     let contentAfterBoundary = bodyContent.substring(boundaryIndex + boundaryMarker.length);
-    const linkSectionRegex = new RegExp(`${escapeRegExp(SUGGESTED_LINKS_TITLE)}\\s*${escapeRegExp(LINKS_START_MARKER)}[\\s\\S]*?${escapeRegExp(LINKS_END_MARKER)}`, "g");
+    const linkSectionRegex = new RegExp(`${escapeRegExp(SUGGESTED_LINKS_TITLE)}s*${escapeRegExp(LINKS_START_MARKER)}[sS]*?${escapeRegExp(LINKS_END_MARKER)}`, "g");
     contentAfterBoundary = contentAfterBoundary.replace(linkSectionRegex, "").trim();
     let finalContent = contentBeforeBoundary + boundaryMarker;
     if (linksSection) {
@@ -1769,9 +1774,57 @@ ${contentAfterBoundary}`;
     return finalContent;
   }
   // 已删除：processFileForLinkInsertion() 函数，因为现在完全使用JSON文件存储AI评分数据
+  async runMigration() {
+    new import_obsidian.Notice("Data migration to SQLite required. Starting process...", 0);
+    console.log("Data migration to SQLite required. Starting process...");
+    if (!this.manifest.dir) {
+      const errorMsg = "Plugin directory not found. Cannot run migration.";
+      console.error(errorMsg);
+      new import_obsidian.Notice(errorMsg, 0);
+      return Promise.reject(new Error(errorMsg));
+    }
+    return new Promise((resolve, reject) => {
+      const vaultBasePath = this.app.vault.adapter.getBasePath();
+      const scriptToExecutePath = path.join(vaultBasePath, this.manifest.dir || "", "jina_obsidian_processor.py");
+      const outputDirInVault = this.manifest.dir;
+      const args = [
+        scriptToExecutePath,
+        "--project_root",
+        vaultBasePath,
+        "--output_dir",
+        outputDirInVault,
+        "--migrate"
+      ];
+      const pythonProcess = (0, import_child_process.spawn)(this.settings.pythonPath, args);
+      pythonProcess.stdout.on("data", (data) => {
+        console.log(`Migration script stdout: ${data}`);
+      });
+      pythonProcess.stderr.on("data", (data) => {
+        console.error(`Migration script stderr: ${data}`);
+      });
+      pythonProcess.on("close", async (code) => {
+        if (code === 0) {
+          new import_obsidian.Notice("\u2705 Data migration to SQLite completed successfully!");
+          console.log("\u2705 Data migration to SQLite completed successfully!");
+          this.settings.dataMigrationCompleted = true;
+          await this.saveSettings();
+          resolve();
+        } else {
+          new import_obsidian.Notice(`\u274C Data migration failed with code ${code}. Check console for details.`, 0);
+          console.error(`Data migration failed with code ${code}.`);
+          reject(new Error(`Migration failed with code ${code}`));
+        }
+      });
+      pythonProcess.on("error", (err) => {
+        new import_obsidian.Notice("\u274C Failed to start migration script. Check console for details.", 0);
+        console.error("Failed to start migration script:", err);
+        reject(err);
+      });
+    });
+  }
 };
 function escapeRegExp(string) {
-  return string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return string.replace(/[.*+?^${}()|[\]\\]/g, "$&");
 }
 var JinaLinkerSettingTab = class extends import_obsidian.PluginSettingTab {
   constructor(app, plugin) {
@@ -1826,7 +1879,7 @@ var JinaLinkerSettingTab = class extends import_obsidian.PluginSettingTab {
     new import_obsidian.Setting(containerEl).setClass("jina-settings-block").setName("Jina \u76F8\u4F3C\u5EA6\u9608\u503C").setDesc("Jina \u5D4C\u5165\u5411\u91CF\u4E4B\u95F4\u8BA1\u7B97\u4F59\u5F26\u76F8\u4F3C\u5EA6\u7684\u6700\u5C0F\u9608\u503C (0.0 \u5230 1.0)\uFF0C\u4F4E\u4E8E\u6B64\u9608\u503C\u7684\u7B14\u8BB0\u5BF9\u5C06\u4E0D\u88AB\u89C6\u4E3A\u5019\u9009\u94FE\u63A5\u3002").addText(
       (text) => text.setValue(this.plugin.settings.similarityThreshold.toString()).onChange(async (value) => {
         const num = parseFloat(value);
-        if (!isNaN(num) && num >= 0 && num >= 0 && num <= 1) {
+        if (!isNaN(num) && num >= 0 && num <= 1) {
           this.plugin.settings.similarityThreshold = num;
         } else {
           new import_obsidian.Notice("\u76F8\u4F3C\u5EA6\u9608\u503C\u5FC5\u987B\u662F 0.0 \u5230 1.0 \u4E4B\u95F4\u7684\u6570\u5B57\u3002");
@@ -1836,7 +1889,7 @@ var JinaLinkerSettingTab = class extends import_obsidian.PluginSettingTab {
     );
     containerEl.createEl("div", { cls: "jina-settings-section", text: "" }).innerHTML = '<div class="jina-settings-section-title">\u9AD8\u7EA7\u6A21\u578B\u4E0E\u5185\u5BB9\u53C2\u6570</div>';
     new import_obsidian.Setting(containerEl).setClass("jina-settings-block").setName("Jina \u6A21\u578B\u540D\u79F0").setDesc("\u7528\u4E8E\u751F\u6210\u5D4C\u5165\u7684 Jina \u6A21\u578B\u540D\u79F0\u3002").addText(
-      (text) => text.setPlaceholder(DEFAULT_SETTINGS.jinaModelName).setValue(this.plugin.settings.jinaModelName).onChange(async (value) => {
+      (text) => text.setPlaceholder(String(DEFAULT_SETTINGS.jinaModelName)).setValue(this.plugin.settings.jinaModelName).onChange(async (value) => {
         this.plugin.settings.jinaModelName = value.trim() || DEFAULT_SETTINGS.jinaModelName;
         await this.plugin.saveSettings();
       })
@@ -1986,7 +2039,7 @@ var JinaLinkerSettingTab = class extends import_obsidian.PluginSettingTab {
     const suggestions = {
       "deepseek": ["deepseek-chat", "deepseek-coder"],
       "openai": ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"],
-      "claude": ["claude-3-5-sonnet-20241022", "claude-3-haiku-20240307", "claude-3-sonnet-20240229"],
+      "claude": ["claude-3-5-sonnet-20240620", "claude-3-haiku-20240307", "claude-3-sonnet-20240229"],
       "gemini": ["gemini-1.5-pro", "gemini-1.5-flash", "gemini-1.0-pro"],
       "custom": []
     };
