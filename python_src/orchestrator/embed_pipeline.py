@@ -1,0 +1,166 @@
+"""Note embedding pipeline (high-level orchestration)."""
+from __future__ import annotations
+
+import datetime as _dt
+import json
+import os
+from typing import Dict, List
+
+from python_src.config import EMBEDDING_BATCH_SIZE
+from python_src.embeddings.generator import get_jina_embeddings_batch
+from python_src.hash_utils.hasher import (
+    calculate_hash_from_content,
+    extract_content_for_hashing,
+)
+from python_src.io.note_loader import read_markdown_with_frontmatter
+from python_src.utils.db import get_db_connection
+from python_src.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
+
+def process_and_embed_notes(
+    project_root_abs: str,
+    files_relative_to_project_root: List[str],
+    embeddings_db_path: str,
+    jina_api_key_to_use: str,
+    jina_model_name_to_use: str,
+    max_chars_for_jina_to_use: int,
+    embedding_batch_size: int = EMBEDDING_BATCH_SIZE,
+) -> Dict:
+    """处理笔记，生成嵌入并保存到 SQLite。返回与旧版兼容的数据结构。"""
+    conn = get_db_connection(embeddings_db_path)
+    cur = conn.cursor()
+
+    # 从数据库加载现有数据
+    files_data_from_db: Dict[str, Dict] = {}
+    cur.execute(
+        "SELECT file_path, content_hash, embedding, processed_content FROM file_embeddings"
+    )
+    for fp, h, emb_blob, proc in cur.fetchall():
+        files_data_from_db[fp] = {
+            "hash": h,
+            "embedding": json.loads(emb_blob) if emb_blob else None,
+            "processed_content": proc,
+        }
+
+    embedded_count = 0
+    processed_files_this_run = 0
+    all_files_data_for_return = files_data_from_db.copy()
+
+    # 批处理
+    total_files = len(files_relative_to_project_root)
+    batch_size = embedding_batch_size
+    for batch_start in range(0, total_files, batch_size):
+        batch_files = files_relative_to_project_root[batch_start : batch_start + batch_size]
+        logger.info("批量处理文件 %s-%s/%s", batch_start + 1, batch_start + len(batch_files), total_files)
+
+        batch_contents: List[str] = []
+        batch_file_info: List[Dict] = []
+
+        for rel_path in batch_files:
+            abs_path = os.path.join(project_root_abs, rel_path)
+            if not os.path.exists(abs_path):
+                logger.warning("文件不存在，已跳过并从 DB 删除: %s", rel_path)
+                cur.execute("DELETE FROM file_embeddings WHERE file_path = ?", (rel_path,))
+                all_files_data_for_return.pop(rel_path, None)
+                continue
+
+            body, fm, _ = read_markdown_with_frontmatter(abs_path)
+            content_to_hash = extract_content_for_hashing(body)
+            if content_to_hash is None:
+                # 如果没有 boundary marker，则用整个 body
+                content_to_hash = body.rstrip("\r\n") + "\n"
+            content_hash = calculate_hash_from_content(content_to_hash)
+            processed_content = body[:max_chars_for_jina_to_use]
+
+            existing = files_data_from_db.get(rel_path)
+
+            stored_hash_fm = fm.get("jina_hash") if isinstance(fm, dict) else None
+
+            # 判断是否需要重新嵌入：front-matter 哈希与内容一致，且数据库已有同哈希嵌入
+            if (
+                stored_hash_fm == content_hash
+                and existing
+                and existing["hash"] == content_hash
+                and existing["embedding"] is not None
+            ):
+                all_files_data_for_return[rel_path] = existing
+                continue
+
+            batch_contents.append(processed_content)
+            batch_file_info.append(
+                {
+                    "file_path": rel_path,
+                    "content_hash": content_hash,
+                    "processed_content": processed_content,
+                }
+            )
+
+        if not batch_contents:
+            continue
+
+        embeddings = get_jina_embeddings_batch(
+            batch_contents,
+            jina_api_key_to_use=jina_api_key_to_use,
+            jina_model_name_to_use=jina_model_name_to_use,
+        )
+        for info, emb in zip(batch_file_info, embeddings):
+            rel_path = info["file_path"]
+            cur.execute(
+                """
+                INSERT INTO file_embeddings (file_path, content_hash, embedding, processed_content, embedding_dimension, updated_at)
+                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(file_path) DO UPDATE SET
+                    content_hash=excluded.content_hash,
+                    embedding=excluded.embedding,
+                    processed_content=excluded.processed_content,
+                    embedding_dimension=excluded.embedding_dimension,
+                    updated_at=CURRENT_TIMESTAMP
+                """,
+                (
+                    rel_path,
+                    info["content_hash"],
+                    json.dumps(emb) if emb else None,
+                    info["processed_content"],
+                    len(emb) if emb else None,
+                ),
+            )
+            all_files_data_for_return[rel_path] = {
+                "hash": info["content_hash"],
+                "embedding": emb,
+                "processed_content": info["processed_content"],
+            }
+            if emb:
+                embedded_count += 1
+            processed_files_this_run += 1
+
+        conn.commit()
+
+    # 更新元数据
+    cur.execute(
+        "INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)",
+        ("generated_at_utc", _dt.datetime.now(_dt.timezone.utc).isoformat()),
+    )
+    cur.execute(
+        "INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)",
+        ("jina_model_name", jina_model_name_to_use),
+    )
+    conn.commit()
+    conn.close()
+
+    logger.info(
+        "嵌入完成：共处理 %s 文件，生成/更新 %s 嵌入。", processed_files_this_run, embedded_count
+    )
+
+    return {
+        "_metadata": {
+            "generated_at_utc": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+            "jina_model_name": jina_model_name_to_use,
+            "script_version": "orchestrator.embed_pipeline",
+        },
+        "files": all_files_data_for_return,
+    }
+
+
+__all__ = ["process_and_embed_notes"] 

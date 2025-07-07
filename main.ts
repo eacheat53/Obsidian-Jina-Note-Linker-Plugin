@@ -14,7 +14,8 @@ import { UpdateHashesModal } from './ui/modals/update-hashes-modal';
 import { AddHashBoundaryModal } from './ui/modals/add-hash-boundary-modal';
 import { log } from './utils/error-handler';
 import { DEFAULT_AI_MODELS } from './models/constants';
-import { AIProvider } from './models/interfaces';
+import { AIProvider, RunOptions } from './models/interfaces';
+import { NotificationService } from './utils/notification-service';
 
 export default class JinaLinkerPlugin extends Plugin {
     settings: JinaLinkerSettings;
@@ -24,6 +25,7 @@ export default class JinaLinkerPlugin extends Plugin {
     private hashManager: HashManager;
     private linkManager: LinkManager;
     private fileProcessor: FileProcessor;
+    private notificationService: NotificationService;
 
     async onload() {
         console.log('🚀 Jina AI Linker 插件开始加载...');
@@ -38,6 +40,9 @@ export default class JinaLinkerPlugin extends Plugin {
         this.linkManager = new LinkManager(this.app, this.settings, this.cacheManager);
         this.fileProcessor = new FileProcessor(this.app, this.cacheManager);
 
+        // 初始化通知服务
+        this.notificationService = NotificationService.getInstance();
+
         if (!this.settings.dataMigrationCompleted) {
             await this.runMigration();
         }
@@ -50,13 +55,13 @@ export default class JinaLinkerPlugin extends Plugin {
         this.addRibbonMenu();
         this.addSettingTab(new JinaLinkerSettingTab(this.app, this));
         
-        new Notice('Jina AI Linker 插件已加载。');
+        this.notificationService.showNotice('Jina AI Linker 插件已加载');
     }
 
     onunload() {
-        this.pythonBridge.cancelCurrentOperation();
+        this.pythonBridge.cancelOperation();
         this.cacheManager.clearCache();
-        new Notice('Jina AI Linker 插件已卸载。');
+        this.notificationService.showNotice('Jina AI Linker 插件已卸载', 2000);
     }
 
     // 添加各种命令
@@ -186,9 +191,9 @@ export default class JinaLinkerPlugin extends Plugin {
 
     // 主要的插件功能执行流程
     private async runPluginWithUI() {
-        new RunPluginModal(this.app, this, async (options) => {
+        new RunPluginModal(this.app, this, async (options: RunOptions) => {
             const progressModal = new ProgressModal(this.app, 'Jina AI Linker 处理进度', () => {
-                this.pythonBridge.cancelCurrentOperation();
+                this.pythonBridge.cancelOperation();
             });
             progressModal.open();
             
@@ -246,13 +251,13 @@ export default class JinaLinkerPlugin extends Plugin {
     }
 
     async runMigration(): Promise<void> {
-        new Notice('Data migration to SQLite required. Starting process...', 0);
-        console.log('Data migration to SQLite required. Starting process...');
+        this.notificationService.showNotice('Data migration to SQLite required. Starting process...', 5000);
+        log('info', 'Data migration to SQLite required. Starting process...');
 
         if (!this.manifest.dir) {
             const errorMsg = 'Plugin directory not found. Cannot run migration.';
-            console.error(errorMsg);
-            new Notice(errorMsg, 0);
+            log('error', errorMsg);
+            this.notificationService.showError(errorMsg);
             return Promise.reject(new Error(errorMsg));
         }
 
@@ -317,11 +322,11 @@ export default class JinaLinkerPlugin extends Plugin {
     }
 
     cancelCurrentOperation(): void {
-        this.pythonBridge.cancelCurrentOperation();
+        this.pythonBridge.cancelOperation();
     }
 
     clearCache(): void {
         this.cacheManager.clearCache();
-        new Notice('🧹 缓存已清理', 2000);
+        this.notificationService.showNotice('🧹 缓存已清理', 2000);
     }
 }

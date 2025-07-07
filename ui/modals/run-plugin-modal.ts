@@ -1,59 +1,75 @@
 import { App, Modal, Setting } from 'obsidian';
-// 使用 any 以避免默认导入限制
-
 import { RunOptions } from '../../models/interfaces';
+import { NotificationService } from '../../utils/notification-service';
 
 export class RunPluginModal extends Modal {
-    plugin: any;
-    onSubmit: (options: RunOptions) => void;
-    options: RunOptions;
+    private plugin: any;
+    private scanPath: string = '/';
+    private scoringMode: "force" | "smart" | "skip" = "smart";
+    private callbackFn?: (options: RunOptions) => void;
+    private notificationService = NotificationService.getInstance();
 
-    constructor(app: App, plugin: any, onSubmit: (options: RunOptions) => void) {
+    constructor(app: App, plugin: any, callbackFn?: (options: RunOptions) => void) {
         super(app);
         this.plugin = plugin;
-        this.onSubmit = onSubmit;
-        // 初始化时使用设置中的默认扫描路径
-        this.options = {
-            scanPath: this.plugin.settings.defaultScanPath,
-            scoringMode: 'smart',
-        };
+        this.callbackFn = callbackFn;
+        
+        if (plugin?.settings?.defaultScanPath) {
+            this.scanPath = plugin.settings.defaultScanPath;
+        }
     }
 
     onOpen() {
         const { contentEl } = this;
-        contentEl.empty();
-
-        contentEl.createEl('h2', { text: '配置 Jina Linker 运行参数' });
+        contentEl.createEl('h2', { text: 'Jina AI Linker 运行选项' });
 
         new Setting(contentEl)
-            .setName('扫描目标文件夹 (可选)')
-            .setDesc('逗号分隔的仓库相对文件夹路径。使用 "/" 扫描整个仓库。会遵循全局排除设置。')
+            .setName('扫描目标文件夹')
+            .setDesc('输入要处理的文件夹路径，多个文件夹用逗号分隔。使用 "/" 表示整个仓库。')
             .addText(text => text
-                .setPlaceholder('例如：/, 文件夹1/子文件夹, 文件夹2')
-                .setValue(this.options.scanPath)
-                .onChange(value => {
-                    this.options.scanPath = value.trim();
-                }));
-
+                .setPlaceholder('例如：/, 文件夹1, 文件夹2/子文件夹')
+                .setValue(this.scanPath)
+                .onChange(async (value) => {
+                    this.scanPath = value.trim();
+                })
+            );
+            
         new Setting(contentEl)
-            .setName('AI 智能评分模式')
-            .setDesc('决定如何处理候选链接对的 AI 评分。')
+            .setName('AI 评分模式')
+            .setDesc('控制如何处理已有评分的文档对。')
             .addDropdown(dropdown => dropdown
-                .addOption('smart', '智能 (仅对未评分的进行评分)')
-                .addOption('force', '强制重新评分 (对所有进行评分)')
-                .addOption('skip', '跳过 AI 评分')
-                .setValue(this.options.scoringMode)
+                .addOption('smart', '智能模式（仅评分新增和变更）')
+                .addOption('force', '强制模式（重新评分所有）')
+                .addOption('skip', '跳过模式（不进行评分）')
+                .setValue(this.scoringMode)
                 .onChange(value => {
-                    this.options.scoringMode = value as "force" | "smart" | "skip";
-                }));
+                    this.scoringMode = value as "force" | "smart" | "skip";
+                })
+            );
 
         new Setting(contentEl)
-            .addButton(button => button
-                .setButtonText('开始处理')
-                .setCta()
+            .addButton(btn => btn
+                .setButtonText('取消')
                 .onClick(() => {
                     this.close();
-                    this.onSubmit(this.options);
+                }))
+            .addButton(btn => btn
+                .setButtonText('运行')
+                .setCta()
+                .onClick(() => {
+                    if (!this.scanPath) {
+                        this.notificationService.showError('请输入有效的扫描路径');
+                        return;
+                    }
+                    
+                    if (this.callbackFn) {
+                        this.callbackFn({ 
+                            scanPath: this.scanPath, 
+                            scoringMode: this.scoringMode 
+                        });
+                    }
+                    
+                    this.close();
                 }));
     }
 

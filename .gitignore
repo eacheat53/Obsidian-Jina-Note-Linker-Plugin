@@ -1,4 +1,23 @@
-node_modules/
+# 编译
+build/
+dist/
+jina-linker.spec
+# Python缓存
+__pycache__/
+*.py[cod]
+*$py.class
+.env/
+.venv/
+.env
+.python-version
+
+# 数据文件
 data.json
-ai_scores.db
-jina_embeddings.db
+*.db
+
+# Node.js
+node_modules/
+
+# 开发环境
+.vscode/
+.idea/

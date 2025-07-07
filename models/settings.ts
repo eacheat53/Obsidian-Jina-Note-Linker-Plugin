@@ -26,7 +26,7 @@ export interface JinaLinkerSettings {
 }
 
 export const DEFAULT_SETTINGS: JinaLinkerSettings = {
-    pythonPath: 'python',
+    pythonPath: 'bin/jina-linker.exe',
     jinaApiKey: '',
     aiModels: { ...DEFAULT_AI_MODELS },
     selectedAIProvider: 'deepseek',

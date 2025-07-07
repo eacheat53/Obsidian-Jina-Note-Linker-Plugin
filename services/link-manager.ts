@@ -1,21 +1,48 @@
-import { Notice, TFile } from 'obsidian';
+import { App, Notice, TFile, Vault } from 'obsidian';
 import { OperationResult } from '../models/interfaces';
 import { 
     DEFAULT_OUTPUT_DIR_IN_VAULT, 
     HASH_BOUNDARY_MARKER,
     LINKS_END_MARKER,
     LINKS_START_MARKER, 
-    SUGGESTED_LINKS_TITLE 
+    SUGGESTED_LINKS_TITLE
 } from '../models/constants';
 import { JinaLinkerSettings } from '../models/settings';
 import { FilePathUtils } from '../utils/path-utils';
 import { createProcessingError, log } from '../utils/error-handler';
 import { CacheManager } from '../utils/cache-manager';
 import * as path from 'path';
+import { NotificationService } from '../utils/notification-service';
+
+const MAX_AI_SCORE = 10;
+const MAX_JINA_SCORE = 1.0;
+
+// 计算链接插入位置的函数
+function findLinkInsertionPosition(content: string): number {
+    const linkSectionStart = content.lastIndexOf(LINKS_START_MARKER);
+    const linkSectionEnd = content.lastIndexOf(LINKS_END_MARKER);
+    
+    if (linkSectionStart !== -1 && linkSectionEnd !== -1 && linkSectionStart < linkSectionEnd) {
+        // 已有链接区域，返回链接区域起始处
+        return linkSectionStart;
+    }
+
+    const hashBoundaryPos = content.lastIndexOf(HASH_BOUNDARY_MARKER);
+    
+    if (hashBoundaryPos !== -1) {
+        // 有哈希边界，在其后添加
+        return hashBoundaryPos + HASH_BOUNDARY_MARKER.length;
+    } else {
+        // 没有哈希边界，在文件末尾添加
+        return content.length;
+    }
+}
 
 export class LinkManager {
+    private notificationService = NotificationService.getInstance();
+
     constructor(
-        private app: any, 
+        private app: App, 
         private settings: JinaLinkerSettings,
         private cacheManager: CacheManager
     ) {}
@@ -52,7 +79,7 @@ export class LinkManager {
             }
 
             log('info', "开始从JSON文件读取AI评分数据并插入建议链接");
-            new Notice('🔄 正在从AI评分数据插入建议链接...', 3000);
+            this.notificationService.showNotice('🔄 正在从AI评分数据插入建议链接...', 3000);
             
             const allMarkdownFiles = this.app.vault.getMarkdownFiles().filter(FilePathUtils.isMarkdownFile);
             let processedFileCount = 0;
@@ -63,6 +90,9 @@ export class LinkManager {
             log('info', `将为 ${allMarkdownFiles.length} 个 Markdown 文件执行链接插入`, {
                 targetFolders: targetFolderPaths.length > 0 ? targetFoldersOption : '仓库根目录'
             });
+
+            // 初始化进度通知
+            this.notificationService.startProgress('链接插入处理', allMarkdownFiles.length);
 
             // 性能优化：批量处理文件
             const batchSize = 5;
@@ -81,15 +111,19 @@ export class LinkManager {
                     }
                 }
                 
-                // 显示进度
-                if (i % 20 === 0) {
-                    new Notice(`📊 已处理 ${Math.min(i + batchSize, allMarkdownFiles.length)}/${allMarkdownFiles.length} 个文件`, 2000);
-                }
+                // 更新进度
+                const currentProcessed = Math.min(i + batchSize, allMarkdownFiles.length);
+                this.notificationService.updateProgress(
+                    currentProcessed, 
+                    `已更新 ${updatedFileCount} 个文件`
+                );
             }
             
             const summaryMessage = `链接插入处理完毕。共检查 ${processedFileCount} 个文件，更新了 ${updatedFileCount} 个文件。`;
             log('info', summaryMessage);
-            new Notice(`✅ ${summaryMessage}`, 5000);
+            
+            // 完成进度通知
+            this.notificationService.completeProgress(summaryMessage);
             
             return {
                 success: true,
@@ -100,6 +134,8 @@ export class LinkManager {
             const processingError = createProcessingError('UNKNOWN',
                 '插入建议链接时发生错误',
                 error instanceof Error ? error.message : String(error));
+                
+            this.notificationService.showError(processingError.message);
             return { success: false, error: processingError };
         }
     }

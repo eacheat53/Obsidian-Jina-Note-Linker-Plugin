@@ -38,7 +38,7 @@ export class FileProcessor {
             new Notice(`读取或解析嵌入文件 "${embeddingsFilePath}" 失败: ${error.message}`);
             return;
         }
-
+        
         const hashManager = new HashManager(this.app, this.cacheManager);
         let updatedJsonCount = 0, updatedFrontmatterCount = 0, notFoundCount = 0, hashFailCount = 0, noChangeCount = 0;
 
@@ -69,7 +69,7 @@ export class FileProcessor {
             } else {
                 notFoundCount++;
             }
-
+            
             try {
                 const content = await this.cacheManager.getCachedFileContent(tFile, this.app.vault);
                 const fmRegex = /^---\s*\n([\s\S]*?)\n---\s*\n/;
@@ -106,7 +106,7 @@ export class FileProcessor {
                 return;
             }
         }
-
+        
         new Notice(`更新完成：JSON(${updatedJsonCount}) frontmatter(${updatedFrontmatterCount}) 未更改(${noChangeCount}) 未找到(${notFoundCount}) 失败(${hashFailCount})`);
     }
 
@@ -114,9 +114,9 @@ export class FileProcessor {
     async addHashBoundaryMarkers(targetRelativePaths: string): Promise<OperationResult<{processedFiles: number, updatedFiles: number}>> {
         new Notice('🔄 开始批量添加哈希边界标记...');
         let files: TFile[] = [];
-        if (!targetRelativePaths.trim()) {
+            if (!targetRelativePaths.trim()) {
             files = this.app.vault.getMarkdownFiles();
-        } else {
+            } else {
             const arr = targetRelativePaths.split(',').map(s => s.trim()).filter(s => s);
             for (const rel of arr) {
                 const norm = normalizePath(rel);
@@ -150,7 +150,7 @@ export class FileProcessor {
                 const newText = match ? match[0] + newBody : newBody;
                 await this.app.vault.modify(file, newText);
                 updated++;
-            } catch (error: any) {
+        } catch (error: any) {
                 log('error', `添加边界标记失败 ${file.path}`, error);
             }
         }

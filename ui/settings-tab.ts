@@ -19,25 +19,13 @@ export class JinaLinkerSettingTab extends PluginSettingTab {
         // API 密钥设置部分
         containerEl.createEl('div', { cls: 'jina-settings-section', text: '' }).innerHTML = '<div class="jina-settings-section-title">基本设置</div>';
 
-        new Setting(containerEl)
-            .setClass('jina-settings-block')
-            .setName('Python 解释器路径')
-            .setDesc('Python 可执行文件的命令或完整路径 (例如：python, python3, /usr/bin/python, C:\\Python39\\python.exe)')
-            .addText(text => text
-                .setPlaceholder(DEFAULT_SETTINGS.pythonPath)
-                .setValue(this.plugin.settings.pythonPath)
-                .onChange(async (value) => {
-                    this.plugin.settings.pythonPath = value.trim() || DEFAULT_SETTINGS.pythonPath;
-                    await this.plugin.saveSettings();
-                }));
-
         // API 密钥设置部分
         containerEl.createEl('div', { cls: 'jina-settings-section', text: '' }).innerHTML = '<div class="jina-settings-section-title">API 密钥</div>';
 
         new Setting(containerEl)
             .setClass('jina-settings-block')
             .setName('Jina API 密钥')
-            .setDesc('您的 Jina AI API 密钥，用于生成文本嵌入向量。')
+            .setDesc('您的 Jina API 密钥，用于生成文本嵌入向量。')
             .addText(text => {
                 text.inputEl.type = 'password';
                 text.setPlaceholder('输入 Jina API 密钥')
@@ -134,71 +122,6 @@ export class JinaLinkerSettingTab extends PluginSettingTab {
                 })
             );
         
-    // 显示选中AI提供商的配置
-        this.displayAIProviderSettings(containerEl);
-
-        // Python 脚本处理参数
-        containerEl.createEl('div', { cls: 'jina-settings-section', text: '' }).innerHTML = '<div class="jina-settings-section-title">处理参数</div>';
-        
-        new Setting(containerEl)
-            .setClass('jina-settings-block')
-            .setName('默认扫描路径')
-            .setDesc('运行插件时默认扫描的文件夹路径 (逗号分隔)。使用 "/" 表示整个仓库。')
-            .addText(text => text
-                .setPlaceholder('例如：/, 文件夹1, 文件夹2/子文件夹')
-                .setValue(this.plugin.settings.defaultScanPath)
-                .onChange(async (value) => {
-                    this.plugin.settings.defaultScanPath = value.trim() || DEFAULT_SETTINGS.defaultScanPath;
-                    await this.plugin.saveSettings();
-                })
-            );
-
-        new Setting(containerEl)
-            .setClass('jina-settings-block')
-            .setName('排除的文件模式')
-            .setDesc('Python 脚本处理时要排除的文件名 Glob 模式 (逗号分隔)。')
-            .addText(text => text
-                .setPlaceholder('例如：*.excalidraw, draft-*.md, ZK_*')
-                .setValue(this.plugin.settings.excludedFilesPatterns)
-                .onChange(async (value) => {
-                    this.plugin.settings.excludedFilesPatterns = value;
-                    await this.plugin.saveSettings();
-                })
-            );
-        
-        new Setting(containerEl)
-            .setClass('jina-settings-block')
-            .setName('Jina 相似度阈值')
-            .setDesc('Jina 嵌入向量之间计算余弦相似度的最小阈值 (0.0 到 1.0)，低于此阈值的笔记对将不被视为候选链接。')
-            .addText(text => text
-                .setValue(this.plugin.settings.similarityThreshold.toString())
-                .onChange(async (value) => {
-                    const num = parseFloat(value);
-                    if (!isNaN(num) && num >= 0 && num <= 1) {
-                        this.plugin.settings.similarityThreshold = num;
-                    } else {
-                        new Notice("相似度阈值必须是 0.0 到 1.0 之间的数字。");
-                    }
-                    await this.plugin.saveSettings();
-                })
-            );
-        
-        // 高级模型与内容参数
-        containerEl.createEl('div', { cls: 'jina-settings-section', text: '' }).innerHTML = '<div class="jina-settings-section-title">高级模型与内容参数</div>';
-        
-        new Setting(containerEl)
-            .setClass('jina-settings-block')
-            .setName('Jina 模型名称')
-            .setDesc('用于生成嵌入的 Jina 模型名称。')
-            .addText(text => text
-                .setPlaceholder(String(DEFAULT_SETTINGS.jinaModelName))
-                .setValue(this.plugin.settings.jinaModelName)
-                .onChange(async (value) => {
-                    this.plugin.settings.jinaModelName = value.trim() || DEFAULT_SETTINGS.jinaModelName;
-                    await this.plugin.saveSettings();
-                })
-            );
-        
         new Setting(containerEl)
             .setClass('jina-settings-block')
             .setName('Jina 嵌入最大字符数')
@@ -211,7 +134,6 @@ export class JinaLinkerSettingTab extends PluginSettingTab {
                     await this.plugin.saveSettings();
                 })
             );
-        
         
         new Setting(containerEl)
             .setClass('jina-settings-block')
@@ -266,140 +188,7 @@ export class JinaLinkerSettingTab extends PluginSettingTab {
                     this.plugin.settings.maxLinksToInsertPerNote = parseInt(value) || DEFAULT_SETTINGS.maxLinksToInsertPerNote;
                     await this.plugin.saveSettings();
                 })
-            );
-         // 显示选中AI提供商的配置
-         this.displayAIProviderSettings(containerEl);
-
-         // Python 脚本处理参数
-         containerEl.createEl('div', { cls: 'jina-settings-section', text: '' }).innerHTML = '<div class="jina-settings-section-title">处理参数</div>';
-         
-         new Setting(containerEl)
-             .setClass('jina-settings-block')
-             .setName('默认扫描路径')
-             .setDesc('运行插件时默认扫描的文件夹路径 (逗号分隔)。使用 "/" 表示整个仓库。')
-             .addText(text => text
-                 .setPlaceholder('例如：/, 文件夹1, 文件夹2/子文件夹')
-                 .setValue(this.plugin.settings.defaultScanPath)
-                 .onChange(async (value) => {
-                     this.plugin.settings.defaultScanPath = value.trim() || DEFAULT_SETTINGS.defaultScanPath;
-                     await this.plugin.saveSettings();
-                 })
-             );
- 
-         new Setting(containerEl)
-             .setClass('jina-settings-block')
-             .setName('排除的文件模式')
-             .setDesc('Python 脚本处理时要排除的文件名 Glob 模式 (逗号分隔)。')
-             .addText(text => text
-                 .setPlaceholder('例如：*.excalidraw, draft-*.md, ZK_*')
-                 .setValue(this.plugin.settings.excludedFilesPatterns)
-                 .onChange(async (value) => {
-                     this.plugin.settings.excludedFilesPatterns = value;
-                     await this.plugin.saveSettings();
-                 })
-             );
-         
-         new Setting(containerEl)
-             .setClass('jina-settings-block')
-             .setName('Jina 相似度阈值')
-             .setDesc('Jina 嵌入向量之间计算余弦相似度的最小阈值 (0.0 到 1.0)，低于此阈值的笔记对将不被视为候选链接。')
-             .addText(text => text
-                 .setValue(this.plugin.settings.similarityThreshold.toString())
-                 .onChange(async (value) => {
-                     const num = parseFloat(value);
-                     if (!isNaN(num) && num >= 0 && num <= 1) {
-                         this.plugin.settings.similarityThreshold = num;
-                     } else {
-                         new Notice("相似度阈值必须是 0.0 到 1.0 之间的数字。");
-                     }
-                     await this.plugin.saveSettings();
-                 })
-             );
-         
-         // 高级模型与内容参数
-         containerEl.createEl('div', { cls: 'jina-settings-section', text: '' }).innerHTML = '<div class="jina-settings-section-title">高级模型与内容参数</div>';
-         
-         new Setting(containerEl)
-             .setClass('jina-settings-block')
-             .setName('Jina 模型名称')
-             .setDesc('用于生成嵌入的 Jina 模型名称。')
-             .addText(text => text
-                 .setPlaceholder(String(DEFAULT_SETTINGS.jinaModelName))
-                 .setValue(this.plugin.settings.jinaModelName)
-                 .onChange(async (value) => {
-                     this.plugin.settings.jinaModelName = value.trim() || DEFAULT_SETTINGS.jinaModelName;
-                     await this.plugin.saveSettings();
-                 })
-             );
-         
-         new Setting(containerEl)
-             .setClass('jina-settings-block')
-             .setName('Jina 嵌入最大字符数')
-             .setDesc('传递给 Jina API 进行嵌入的文本内容的最大字符数。')
-             .addText(text => text
-                 .setPlaceholder(String(DEFAULT_SETTINGS.maxCharsForJina))
-                 .setValue(this.plugin.settings.maxCharsForJina.toString())
-                 .onChange(async (value) => {
-                     this.plugin.settings.maxCharsForJina = parseInt(value) || DEFAULT_SETTINGS.maxCharsForJina;
-                     await this.plugin.saveSettings();
-                 })
-             );
-         
-         
-         new Setting(containerEl)
-             .setClass('jina-settings-block')
-             .setName('AI 评分内容最大长度')
-             .setDesc('传递给 DeepSeek API 进行评分的每条笔记内容的最大字符数。')
-             .addText(text => text
-                 .setPlaceholder(String(DEFAULT_SETTINGS.maxContentLengthForAI))
-                 .setValue(this.plugin.settings.maxContentLengthForAI.toString())
-                 .onChange(async (value) => {
-                     this.plugin.settings.maxContentLengthForAI = parseInt(value) || DEFAULT_SETTINGS.maxContentLengthForAI;
-                     await this.plugin.saveSettings();
-                 })
-             );
-         
-         new Setting(containerEl)
-             .setClass('jina-settings-block')
-             .setName('每源笔记送交 AI 评分的最大候选链接数')
-             .setDesc('对于每个源笔记，按 Jina 相似度从高到低排序后，最多选择多少个候选链接发送给 AI进行评分。')
-             .addText(text => text
-                 .setPlaceholder(String(DEFAULT_SETTINGS.maxCandidatesPerSourceForAIScoring))
-                 .setValue(this.plugin.settings.maxCandidatesPerSourceForAIScoring.toString())
-                 .onChange(async (value) => {
-                     this.plugin.settings.maxCandidatesPerSourceForAIScoring = parseInt(value) || DEFAULT_SETTINGS.maxCandidatesPerSourceForAIScoring;
-                     await this.plugin.saveSettings();
-                 })
-             );
-         
-         // 链接插入与哈希设置
-         containerEl.createEl('div', { cls: 'jina-settings-section', text: '' }).innerHTML = '<div class="jina-settings-section-title">链接插入设置</div>';
-         
-         new Setting(containerEl)
-             .setClass('jina-settings-block')
-             .setName('链接插入的最小 AI 分数')
-             .setDesc('只有 AI 评分大于或等于此值的候选链接才会被插入到笔记中。')
-             .addText(text => text
-                 .setPlaceholder(String(DEFAULT_SETTINGS.minAiScoreForLinkInsertion))
-                 .setValue(this.plugin.settings.minAiScoreForLinkInsertion.toString())
-                 .onChange(async (value) => {
-                     this.plugin.settings.minAiScoreForLinkInsertion = parseInt(value) || DEFAULT_SETTINGS.minAiScoreForLinkInsertion;
-                     await this.plugin.saveSettings();
-                 })
-             );
-         
-         new Setting(containerEl)
-             .setClass('jina-settings-block')
-             .setName('每个笔记最多插入的链接数')
-             .setDesc('对于每个笔记，最多插入多少条符合条件的建议链接。')
-             .addText(text => text
-                 .setPlaceholder(String(DEFAULT_SETTINGS.maxLinksToInsertPerNote))
-                 .setValue(this.plugin.settings.maxLinksToInsertPerNote.toString())
-                 .onChange(async (value) => {
-                     this.plugin.settings.maxLinksToInsertPerNote = parseInt(value) || DEFAULT_SETTINGS.maxLinksToInsertPerNote;
-                     await this.plugin.saveSettings();
-                 })
-             );    
+            );    
 
         // 性能和调试设置
         containerEl.createEl('div', { cls: 'jina-settings-section', text: '' }).innerHTML = '<div class="jina-settings-section-title">性能和调试</div>';
@@ -526,69 +315,65 @@ export class JinaLinkerSettingTab extends PluginSettingTab {
     displayModelSuggestions(containerEl: HTMLElement, provider: AIProvider): void {
         const suggestions = this.getModelSuggestions(provider);
         if (suggestions.length === 0) return;
-
-        const suggestionEl = containerEl.createEl('div', { cls: 'jina-model-suggestions' });
-        suggestionEl.createEl('div', {
-            text: '常用模型：',
-            cls: 'jina-suggestion-title'
-        });
         
-        const buttonContainer = suggestionEl.createEl('div', { cls: 'jina-suggestion-buttons' });
+        const suggestionContainer = containerEl.createEl('div', { cls: 'jina-model-suggestions' });
+        suggestionContainer.createEl('span', { text: '常用模型: ', cls: 'jina-suggestion-label' });
         
-        suggestions.forEach(model => {
-            const button = buttonContainer.createEl('button', {
-                text: model,
-                cls: 'jina-suggestion-button'
+        for (const suggestion of suggestions) {
+            const suggestionEl = suggestionContainer.createEl('span', { 
+                text: suggestion,
+                cls: 'jina-model-suggestion'
             });
-            button.addEventListener('click', async () => {
-                this.plugin.settings.aiModels[provider].modelName = model;
+            
+            suggestionEl.addEventListener('click', async () => {
+                this.plugin.settings.aiModels[provider].modelName = suggestion;
                 await this.plugin.saveSettings();
-                this.display();
+                this.display(); // 重新渲染
             });
-        });
-
+        }
+        
         // 添加样式
         const styleEl = containerEl.createEl('style');
         styleEl.textContent = `
             .jina-model-suggestions {
-                margin-top: 8px;
-                padding: 12px;
-                background-color: var(--background-secondary);
-                border-radius: 6px;
+                margin-top: 6px;
+                margin-bottom: 16px;
+                margin-left: 24px;
             }
-            .jina-suggestion-title {
-                font-size: 12px;
+            .jina-suggestion-label {
                 color: var(--text-muted);
-                margin-bottom: 8px;
+                margin-right: 8px;
+                font-size: 13px;
             }
-            .jina-suggestion-buttons {
-                display: flex;
-                flex-wrap: wrap;
-                gap: 6px;
-            }
-            .jina-suggestion-button {
-                padding: 4px 8px;
-                font-size: 11px;
-                background-color: var(--interactive-normal);
-                border: 1px solid var(--background-modifier-border);
+            .jina-model-suggestion {
+                display: inline-block;
+                background-color: var(--interactive-accent);
+                color: var(--text-on-accent);
+                padding: 2px 8px;
                 border-radius: 4px;
+                margin-right: 8px;
+                margin-bottom: 8px;
+                font-size: 12px;
                 cursor: pointer;
-                color: var(--text-normal);
             }
-            .jina-suggestion-button:hover {
-                background-color: var(--interactive-hover);
+            .jina-model-suggestion:hover {
+                opacity: 0.85;
             }
         `;
     }
 
     getModelSuggestions(provider: AIProvider): string[] {
-        const suggestions = {
-            'deepseek': ['deepseek-chat', 'deepseek-coder'],
-            'openai': ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo'],
-            'claude': ['claude-3-5-sonnet-20240620', 'claude-3-haiku-20240307', 'claude-3-sonnet-20240229'],
-            'gemini': ['gemini-1.5-pro', 'gemini-1.5-flash', 'gemini-1.0-pro'],
-            'custom': []
-        };
-        return suggestions[provider] || [];
+        switch(provider) {
+            case 'deepseek':
+                return ['deepseek-chat', 'deepseek-coder'];
+            case 'openai':
+                return ['gpt-4-turbo-preview', 'gpt-4', 'gpt-3.5-turbo'];
+            case 'claude':
+                return ['claude-3-opus-20240229', 'claude-3-sonnet-20240229', 'claude-3-haiku-20240307'];
+            case 'gemini':
+                return ['gemini-pro', 'gemini-1.5-pro'];
+            default:
+                return [];
+        }
     }
 }
