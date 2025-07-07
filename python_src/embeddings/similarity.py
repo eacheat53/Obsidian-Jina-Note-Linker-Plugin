@@ -44,8 +44,10 @@ def generate_candidate_pairs(embeddings_data_input: Dict, similarity_threshold: 
 
     for i, p1 in enumerate(valid_paths):
         emb1 = files_data[p1]["embedding"]
+        hash1 = files_data[p1].get("hash")
         for j, p2 in enumerate(valid_paths[i + 1 :], start=i + 1):
             emb2 = files_data[p2]["embedding"]
+            hash2 = files_data[p2].get("hash")
             completed += 1
             if completed >= next_mark:
                 logger.info("进度 %.1f%% - 正在比较 %s <-> %s", completed / total * 100, p1, p2)
@@ -58,6 +60,8 @@ def generate_candidate_pairs(embeddings_data_input: Dict, similarity_threshold: 
                         "source_path": p1,
                         "target_path": p2,
                         "jina_similarity": sim,
+                        "source_hash": hash1,
+                        "target_hash": hash2,
                     }
                 )
 

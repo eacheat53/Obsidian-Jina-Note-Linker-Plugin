@@ -95,8 +95,8 @@ export default class JinaLinkerPlugin extends Plugin {
                     const relativePaths = filePathsStr.split(',').map(p => p.trim()).filter(p => p);
                     if (relativePaths.length === 0) {
                         new Notice('未提供有效的文件路径。');
-                        return;
-                    }
+                return;
+            }
                     await this.fileProcessor.updateHashesInEmbeddingsFile(relativePaths);
                 }).open();
             }
@@ -109,16 +109,16 @@ export default class JinaLinkerPlugin extends Plugin {
                 console.log('🏷️ 用户启动：批量添加哈希边界标记功能');
                 new AddHashBoundaryModal(this.app, this, async (targetPaths) => {
                     const result = await this.fileProcessor.addHashBoundaryMarkers(targetPaths);
-                    if (result.success) {
+                        if (result.success) {
                         const { processedFiles, updatedFiles } = result.data!;
                         new Notice(`✅ 处理完成！检查了 ${processedFiles} 个文件，添加标记到 ${updatedFiles} 个文件`);
-                    } else {
+                            } else {
                         new Notice('❌ 批量添加哈希边界标记失败');
                     }
                 }).open();
             }
         });
-        
+
         // 添加测试命令（仅在开发模式下使用）
         this.addCommand({
             id: 'test-insert-links-into-body',
@@ -236,18 +236,18 @@ export default class JinaLinkerPlugin extends Plugin {
 
     // 计算单个文件的哈希值
     private async calculateHashForFile(filePath: string) {
-        const normalizedFilePath = normalizePath(filePath);
-        const tFile = this.app.vault.getAbstractFileByPath(normalizedFilePath);
+                    const normalizedFilePath = normalizePath(filePath);
+                    const tFile = this.app.vault.getAbstractFileByPath(normalizedFilePath);
 
-        if (!(tFile instanceof TFile)) {
-            new Notice(`错误：文件 "${normalizedFilePath}" 未找到或不是一个有效文件。`);
-            return;
-        }
-        
+                    if (!(tFile instanceof TFile)) {
+                        new Notice(`错误：文件 "${normalizedFilePath}" 未找到或不是一个有效文件。`);
+                        return;
+                    }
+                    
         const hash = await this.hashManager.calculateNoteContentHashForFile(tFile);
-        if (hash) {
-            new Notice(`文件 "${filePath}" 的内容哈希值: ${hash}`);
-        }
+                    if (hash) {
+                        new Notice(`文件 "${filePath}" 的内容哈希值: ${hash}`);
+                    }
     }
 
     async runMigration(): Promise<void> {

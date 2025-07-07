@@ -10,11 +10,13 @@ JINA_API_REQUEST_DELAY: float = 0.1
 
 # --------------------------- AI provider generic ---------------------------
 # Delay inserted between individual AI provider requests (seconds)
-AI_API_REQUEST_DELAY_SECONDS: float = 1.0
+AI_API_REQUEST_DELAY_SECONDS: float = 3.0
 
 # ------------------------------- Batch sizes -------------------------------
 EMBEDDING_BATCH_SIZE: int = 10  # number of notes per embedding batch
-AI_SCORING_BATCH_SIZE: int = 5  # number of pairs per scoring batch
+AI_SCORING_BATCH_SIZE: int = 10  # 最大批量处理对数，可通过设置覆盖
+AI_SCORING_MAX_CHARS_PER_NOTE: int = 2000  # 每个笔记最大处理字符数，可通过设置覆盖
+AI_SCORING_MAX_TOTAL_CHARS: int = 23000  # 批量处理总字符数限制，可通过设置覆盖
 
 # --------------------------- Default file names ---------------------------
 DEFAULT_EMBEDDINGS_FILE_NAME: str = "jina_embeddings.db"

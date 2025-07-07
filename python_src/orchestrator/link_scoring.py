@@ -6,7 +6,7 @@ from typing import Dict, List
 
 from python_src.ai_scoring.provider import call_ai_api_batch_for_relevance
 from python_src.ai_scoring.scorer import build_ai_batch_request
-from python_src.config import AI_SCORING_BATCH_SIZE
+from python_src.config import AI_SCORING_BATCH_SIZE, AI_SCORING_MAX_CHARS_PER_NOTE, AI_SCORING_MAX_TOTAL_CHARS
 from python_src.io.note_loader import read_markdown_with_frontmatter
 from python_src.utils.db import get_db_connection
 from python_src.utils.logger import get_logger
@@ -26,8 +26,34 @@ def score_candidates(
     max_content_length_for_ai_to_use: int,
     force_rescore: bool = False,
     ai_scoring_batch_size: int = AI_SCORING_BATCH_SIZE,
+    custom_scoring_prompt: str = None,
+    use_custom_scoring_prompt: bool = False,
+    max_pairs_per_request: int = None,
+    max_chars_per_note: int = None,
+    max_total_chars_per_request: int = None,
+    save_api_responses: bool = True,
 ) -> None:
-    """对候选链接对进行 AI 评分并将结果写入 SQLite。"""
+    """对候选链接对进行 AI 评分并将结果写入 SQLite。
+    
+    Args:
+        candidate_pairs: 候选链接对列表
+        project_root_abs: 项目根目录绝对路径
+        embeddings_db_path: 嵌入数据库路径
+        ai_scores_db_path: AI 评分数据库路径
+        ai_provider: AI 提供商名称
+        ai_api_url: AI API URL
+        ai_api_key: AI API 密钥
+        ai_model_name: AI 模型名称
+        max_content_length_for_ai_to_use: AI 评分使用的最大内容长度
+        force_rescore: 是否强制重新评分
+        ai_scoring_batch_size: AI 评分批量大小
+        custom_scoring_prompt: 自定义的评分提示词
+        use_custom_scoring_prompt: 是否使用自定义评分提示词
+        max_pairs_per_request: 每个API请求最多包含的笔记对数
+        max_chars_per_note: 每个笔记在AI评分时的最大字符数
+        max_total_chars_per_request: 每个API批量请求的最大总字符数
+        save_api_responses: 是否保存API响应内容到数据库
+    """
 
     if not candidate_pairs:
         logger.info("没有候选链接对需要评分。")
@@ -36,80 +62,149 @@ def score_candidates(
     conn = get_db_connection(ai_scores_db_path)
     cur = conn.cursor()
 
-    # 建立 file_path ↔ id 双向映射
-    cur.execute("SELECT id, file_path FROM file_paths")
-    id_by_path: Dict[str, int] = {p: fid for fid, p in cur.fetchall()}
+    # 过滤出有效的候选对
+    valid_pairs = []
+    for pair in candidate_pairs:
+        source_abs = os.path.join(project_root_abs, pair["source_path"])
+        target_abs = os.path.join(project_root_abs, pair["target_path"])
+        
+        # 检查文件是否存在
+        if not os.path.exists(source_abs):
+            logger.warning("源文件不存在，跳过: %s", source_abs)
+            continue
+        if not os.path.exists(target_abs):
+            logger.warning("目标文件不存在，跳过: %s", target_abs)
+            continue
+            
+        valid_pairs.append(pair)
+    
+    # -------------------- 智能跳过已评分对 --------------------
+    if not force_rescore and valid_pairs:
+        logger.info("智能模式: 检查数据库，跳过已存在且哈希未变的 AI 评分…")
+        # 查询所有已评分的路径对及哈希
+        cur.execute(
+            """
+            SELECT source_path, target_path, source_hash, target_hash
+            FROM ai_relationships
+            """
+        )
+        existing_pairs_raw = cur.fetchall()
+        existing_pairs: set[tuple[str, str, str, str]] = {
+            (s, t, sh or "", th or "") for s, t, sh, th in existing_pairs_raw
+        }
+        # 双向加入
+        existing_pairs |= {(t, s, th or "", sh or "") for s, t, sh, th in existing_pairs_raw}
 
-    def ensure_file_id(path: str) -> int:
-        fid = id_by_path.get(path)
-        if fid is None:
-            cur.execute("INSERT INTO file_paths (file_path) VALUES (?)", (path,))
-            fid = cur.lastrowid
-            id_by_path[path] = fid
-        return fid
+        before_count = len(valid_pairs)
+        def need_score(p):
+            return (p["source_path"], p["target_path"], p.get("source_hash", ""), p.get("target_hash", "")) not in existing_pairs
+
+        valid_pairs = [p for p in valid_pairs if need_score(p)]
+        skipped = before_count - len(valid_pairs)
+        logger.info("已跳过 %s 条已评分链接对，剩余 %s 条待评分。", skipped, len(valid_pairs))
+    
+    if not valid_pairs:
+        logger.info("没有需要 AI 评分的候选对，提前结束。")
+        return
+        
+    logger.info("AI 评分开始，有效候选对: %s/%s", len(valid_pairs), len(candidate_pairs))
 
     # 按批处理
-    for batch_start in range(0, len(candidate_pairs), ai_scoring_batch_size):
-        batch_pairs = candidate_pairs[batch_start : batch_start + ai_scoring_batch_size]
-        logger.info("AI 评分批次 %s-%s/%s", batch_start + 1, batch_start + len(batch_pairs), len(candidate_pairs))
+    for batch_start in range(0, len(valid_pairs), ai_scoring_batch_size):
+        batch_pairs = valid_pairs[batch_start : batch_start + ai_scoring_batch_size]
+        logger.info("AI 评分批次 %s-%s/%s", batch_start + 1, batch_start + len(batch_pairs), len(valid_pairs))
 
         # 构造 prompt_pairs
         prompt_pairs: List[Dict] = []
         for p in batch_pairs:
             source_abs = os.path.join(project_root_abs, p["source_path"])
             target_abs = os.path.join(project_root_abs, p["target_path"])
-            src_body, _, _ = read_markdown_with_frontmatter(source_abs)
-            tgt_body, _, _ = read_markdown_with_frontmatter(target_abs)
-            prompt_pairs.append(
-                {
-                    **p,
-                    "source_name": os.path.basename(p["source_path"]),
-                    "target_name": os.path.basename(p["target_path"]),
-                    "source_content": src_body[:max_content_length_for_ai_to_use],
-                    "target_content": tgt_body[:max_content_length_for_ai_to_use],
-                }
+            
+            try:
+                src_body, _, _ = read_markdown_with_frontmatter(source_abs)
+                tgt_body, _, _ = read_markdown_with_frontmatter(target_abs)
+                
+                prompt_pairs.append(
+                    {
+                        **p,
+                        "source_name": os.path.basename(p["source_path"]),
+                        "target_name": os.path.basename(p["target_path"]),
+                        "source_content": src_body[:max_content_length_for_ai_to_use],
+                        "target_content": tgt_body[:max_content_length_for_ai_to_use],
+                    }
+                )
+            except Exception as e:
+                logger.error("读取文件失败，跳过: %s 或 %s, 错误: %s", source_abs, target_abs, e)
+                continue
+
+        if not prompt_pairs:
+            logger.warning("该批次没有有效的提示对，跳过")
+            continue
+
+        # 根据设置决定是否使用自定义提示词
+        scoring_prompt = custom_scoring_prompt if use_custom_scoring_prompt else None
+        
+        try:
+            # 传递新的批量处理参数
+            data, headers, final_url = build_ai_batch_request(
+                ai_provider,
+                ai_model_name,
+                ai_api_key,
+                prompt_pairs,
+                max_content_length_for_ai_to_use,
+                custom_scoring_prompt=scoring_prompt,
+                max_pairs=max_pairs_per_request,
+                max_chars_per_note=max_chars_per_note,
+                max_total_chars=max_total_chars_per_request,
             )
 
-        data, headers, final_url = build_ai_batch_request(
-            ai_provider,
-            ai_model_name,
-            ai_api_key,
-            prompt_pairs,
-            max_content_length_for_ai_to_use,
-        )
+            # 确定提示词类型
+            prompt_type = "custom" if use_custom_scoring_prompt else "default"
 
-        results = call_ai_api_batch_for_relevance(
-            ai_provider,
-            ai_model_name,
-            ai_api_key,
-            final_url,
-            prompt_pairs,
-            headers,
-            data,
-            max_retries=3,
-        )
+            results = call_ai_api_batch_for_relevance(
+                ai_provider,
+                ai_model_name,
+                ai_api_key,
+                final_url,
+                prompt_pairs,
+                headers,
+                data,
+                max_retries=3,
+                save_responses=save_api_responses,
+                ai_scores_db_path=ai_scores_db_path,
+                prompt_type=prompt_type,
+            )
+        except Exception as e:
+            logger.error("AI评分请求失败: %s", e)
+            continue
+
+        # 建立 (src_path, tgt_path) -> (src_hash, tgt_hash) 映射
+        p_hash_map = {
+            (pp["source_path"], pp["target_path"]): (pp.get("source_hash", ""), pp.get("target_hash", ""))
+            for pp in prompt_pairs
+        }
 
         # 将结果写入 DB
         rel_insert_rows = []
         for r in results:
-            src_id = ensure_file_id(r["source_path"])
-            tgt_id = ensure_file_id(r["target_path"])
+            src_path = r["source_path"]
+            tgt_path = r["target_path"]
+            sh, th = p_hash_map.get((src_path, tgt_path), ("", ""))
             rel_insert_rows.append(
                 (
-                    src_id,
-                    tgt_id,
+                    src_path,
+                    tgt_path,
+                    sh,
+                    th,
                     r.get("ai_score"),
-                    r.get("jina_similarity"),
                 )
             )
         cur.executemany(
             """
-            INSERT INTO ai_relationships (source_file_id, target_file_id, ai_score, jina_similarity, updated_at)
-            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-            ON CONFLICT(source_file_id, target_file_id) DO UPDATE SET
-                ai_score=excluded.ai_score,
-                jina_similarity=excluded.jina_similarity,
-                updated_at=CURRENT_TIMESTAMP
+            INSERT INTO ai_relationships (source_path, target_path, source_hash, target_hash, ai_score)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(source_path, target_path, source_hash, target_hash) DO UPDATE SET
+                ai_score = excluded.ai_score
             """,
             rel_insert_rows,
         )

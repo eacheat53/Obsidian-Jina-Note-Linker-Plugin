@@ -239,26 +239,16 @@ export class LinkManager {
     // 从JSON数据中获取AI评分候选
     private getAICandidatesFromJSON(filePath: string, aiScoresData: any): any[] {
         try {
-            const aiScores = aiScoresData?.ai_scores || {};
-            const candidates: any[] = [];
-            
-            // 遍历AI评分数据，找到以当前文件为源的评分
-            for (const [key, scoreEntry] of Object.entries(aiScores)) {
-                if (typeof scoreEntry === 'object' && scoreEntry !== null) {
-                    const entry = scoreEntry as any;
-                    if (entry.source_path === filePath && entry.ai_score >= this.settings.minAiScoreForLinkInsertion) {
-                        candidates.push({
-                            targetPath: entry.target_path,
-                            aiScore: entry.ai_score,
-                            jinaScore: entry.jina_similarity
-                        });
-                    }
-                }
-            }
-            
-            // 按AI评分排序，取前N个
-            candidates.sort((a: any, b: any) => (b.aiScore || 0) - (a.aiScore || 0));
-            return candidates.slice(0, this.settings.maxLinksToInsertPerNote);
+            const bySource = aiScoresData?.ai_scores_by_source || {};
+            const rawList: any[] = bySource[filePath] || [];
+            const minScore = this.settings.minAiScoreForLinkInsertion ?? 0;
+
+            const candidates = rawList
+                .filter(([_, score]) => (score || 0) >= minScore)
+                .slice(0, this.settings.maxLinksToInsertPerNote)
+                .map(([targetPath, score]) => ({ targetPath, aiScore: score }));
+
+            return candidates;
             
         } catch (error: any) {
             log('error', `从JSON获取AI候选时发生错误`, error);

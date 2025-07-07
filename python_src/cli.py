@@ -1,14 +1,29 @@
-"""CLI entry that uses new orchestrator pipelines."""
+"""Python command-line interface for Jina linker.
+
+一个前端和Python脚本通信的CLI层（替代原来的单体main.py）。
+"""
 from __future__ import annotations
 
 import argparse
+import sys
 import os
+from pathlib import Path
+import logging
 import time
 
+# 将项目根目录添加到路径，以便能够导入其他模块
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+sys.path.insert(0, parent_dir)
+
+# 在设置路径后导入项目模块
 from python_src.config import (
     DEFAULT_AI_SCORES_FILE_NAME,
     DEFAULT_EMBEDDINGS_FILE_NAME,
     DEFAULT_SIMILARITY_THRESHOLD,
+    AI_SCORING_BATCH_SIZE,
+    AI_SCORING_MAX_CHARS_PER_NOTE,
+    AI_SCORING_MAX_TOTAL_CHARS,
 )
 from python_src.db.schema import EMBEDDINGS_DB_SCHEMA, AI_SCORES_DB_SCHEMA
 from python_src.embeddings.similarity import generate_candidate_pairs
@@ -16,9 +31,10 @@ from python_src.io.note_loader import list_markdown_files
 from python_src.io.output_writer import export_ai_scores_to_json
 from python_src.orchestrator.embed_pipeline import process_and_embed_notes
 from python_src.orchestrator.link_scoring import score_candidates
-from python_src.utils.db import initialize_database
+from python_src.utils.db import initialize_database, check_table_exists, list_database_tables, get_db_connection
 from python_src.utils.logger import init_logger, get_logger
 from python_src.hash_utils.hasher import HASH_BOUNDARY_MARKER
+from python_src.migration.migrate_sqlite import upgrade_ai_scores_schema
 
 init_logger()
 logger = get_logger(__name__)
@@ -39,13 +55,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--max_content_length_for_ai", type=int, default=5000)
     p.add_argument("--ai_scoring_mode", choices=["force", "smart", "skip"], default="smart")
 
+    # 添加自定义评分提示词参数
+    p.add_argument("--use_custom_scoring_prompt", action="store_true", help="使用自定义评分提示词")
+    p.add_argument("--custom_scoring_prompt", default="", help="自定义评分提示词内容")
+
     p.add_argument("--similarity_threshold", type=float, default=DEFAULT_SIMILARITY_THRESHOLD)
     p.add_argument("--scan_target_folders", nargs="*", default=[])
     p.add_argument("--excluded_folders", nargs="*", default=[])
     p.add_argument("--excluded_files_patterns", nargs="*", default=[])
 
     p.add_argument("--embedding_batch_size", type=int, default=10)
-    p.add_argument("--ai_scoring_batch_size", type=int, default=5)
+    p.add_argument("--ai_scoring_batch_size", type=int, default=AI_SCORING_BATCH_SIZE)
+    p.add_argument("--max_chars_per_note", type=int, default=AI_SCORING_MAX_CHARS_PER_NOTE,
+                   help="每个笔记在AI评分时的最大字符数")
+    p.add_argument("--max_total_chars_per_request", type=int, default=AI_SCORING_MAX_TOTAL_CHARS,
+                   help="每个API批量请求的最大总字符数")
     p.add_argument("--hash_boundary_marker", default=HASH_BOUNDARY_MARKER,
                    help="哈希边界标记，用于分隔内容计算哈希的部分")
     p.add_argument("--max_candidates_per_source_for_ai_scoring", type=int, default=20,
@@ -54,6 +78,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--export_json", action="store_true", help="导出AI评分数据到JSON")
     p.add_argument("--export_json_only", action="store_true", help="仅导出AI评分数据到JSON，不执行其他处理")
     p.add_argument("--no_export_json", action="store_true", help="不导出AI评分数据到JSON")
+    p.add_argument("--save_api_responses", action="store_true", default=True,
+                   help="是否保存API请求和响应到数据库中")
+    p.add_argument("--test_ai_responses_db", action="store_true", help="测试ai_responses表是否可正常使用")
     return p
 
 
@@ -76,6 +103,82 @@ def main() -> None:  # pragma: no cover
 
     initialize_database(embeddings_db_path, EMBEDDINGS_DB_SCHEMA)
     initialize_database(ai_scores_db_path, AI_SCORES_DB_SCHEMA)
+    
+    # 升级数据库结构（增加新的ai_responses表）
+    upgrade_ai_scores_schema(ai_scores_db_path)
+    
+    # 验证ai_responses表是否存在
+    logger.info("验证数据库表结构...")
+    has_table = check_table_exists(ai_scores_db_path, "ai_responses")
+    if not has_table:
+        logger.warning("ai_responses表不存在，将尝试重新创建")
+        # 强制重新创建表
+        conn = get_db_connection(ai_scores_db_path)
+        try:
+            conn.execute("""
+            CREATE TABLE IF NOT EXISTS ai_responses (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                batch_id TEXT NOT NULL,
+                ai_provider TEXT NOT NULL,
+                model_name TEXT NOT NULL,
+                request_content TEXT,
+                response_content TEXT,
+                prompt_type TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_ai_responses_batch ON ai_responses(batch_id)")
+            conn.commit()
+            logger.info("已手动创建ai_responses表")
+        except Exception as e:
+            logger.error(f"手动创建表失败: {e}")
+        finally:
+            conn.close()
+    
+    # 列出所有表以确认
+    list_database_tables(ai_scores_db_path)
+    
+    # 测试ai_responses表
+    if args.test_ai_responses_db:
+        logger.info("测试ai_responses表...")
+        conn = get_db_connection(ai_scores_db_path)
+        try:
+            # 插入测试数据
+            test_batch_id = f"test_{int(time.time())}"
+            conn.execute(
+                """
+                INSERT INTO ai_responses (
+                    batch_id, ai_provider, model_name, request_content, response_content, prompt_type
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """, 
+                (test_batch_id, "test", "test-model", "测试请求内容", "测试响应内容", "default")
+            )
+            conn.commit()
+            logger.info("测试数据插入成功")
+            
+            # 查询测试数据
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM ai_responses WHERE batch_id = ?", (test_batch_id,))
+            rows = cursor.fetchall()
+            if rows:
+                logger.info(f"成功查询到测试数据: {rows}")
+                
+                # 清理测试数据
+                conn.execute("DELETE FROM ai_responses WHERE batch_id = ?", (test_batch_id,))
+                conn.commit()
+                logger.info("测试数据已清理")
+            else:
+                logger.error("未能查询到刚插入的测试数据!")
+        except Exception as e:
+            logger.error(f"测试ai_responses表失败: {e}")
+            import traceback
+            logger.error(f"详细错误: {traceback.format_exc()}")
+        finally:
+            conn.close()
+            
+        # 验证测试完成后退出
+        logger.info("ai_responses表测试完成")
+        return
 
     scan_paths = (
         [os.path.join(project_root_abs, p) for p in args.scan_target_folders]
@@ -130,6 +233,12 @@ def main() -> None:  # pragma: no cover
             max_content_length_for_ai_to_use=args.max_content_length_for_ai,
             force_rescore=(args.ai_scoring_mode == "force"),
             ai_scoring_batch_size=args.ai_scoring_batch_size,
+            custom_scoring_prompt=args.custom_scoring_prompt,
+            use_custom_scoring_prompt=args.use_custom_scoring_prompt,
+            max_pairs_per_request=args.ai_scoring_batch_size,
+            max_chars_per_note=args.max_chars_per_note,
+            max_total_chars_per_request=args.max_total_chars_per_request,
+            save_api_responses=args.save_api_responses,
         )
 
     if not args.no_export_json or args.export_json:

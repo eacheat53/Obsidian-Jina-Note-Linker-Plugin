@@ -1,7 +1,7 @@
 import { App, Notice, PluginSettingTab, Setting } from 'obsidian';
 import { AIProvider } from '../models/interfaces';
 import { DEFAULT_AI_MODELS } from '../models/constants';
-import { DEFAULT_SETTINGS } from '../models/settings';
+import { DEFAULT_SETTINGS, DEFAULT_SCORING_PROMPT } from '../models/settings';
 
 export class JinaLinkerSettingTab extends PluginSettingTab {
     plugin: any;
@@ -138,7 +138,7 @@ export class JinaLinkerSettingTab extends PluginSettingTab {
         new Setting(containerEl)
             .setClass('jina-settings-block')
             .setName('AI 评分内容最大长度')
-            .setDesc('传递给 DeepSeek API 进行评分的每条笔记内容的最大字符数。')
+            .setDesc('传递给 AI API 进行评分的每条笔记内容的最大字符数。')
             .addText(text => text
                 .setPlaceholder(String(DEFAULT_SETTINGS.maxContentLengthForAI))
                 .setValue(this.plugin.settings.maxContentLengthForAI.toString())
@@ -160,6 +160,113 @@ export class JinaLinkerSettingTab extends PluginSettingTab {
                     await this.plugin.saveSettings();
                 })
             );
+
+        // 批量处理参数设置
+        containerEl.createEl('div', { cls: 'jina-settings-section', text: '' }).innerHTML = '<div class="jina-settings-section-title">AI 批量处理参数</div>';
+        
+        new Setting(containerEl)
+            .setClass('jina-settings-block')
+            .setName('每次 API 请求的最大笔记对数')
+            .setDesc('每次向 AI 服务发送请求时，最多包含的笔记对数量。增加可减少 API 调用次数，但可能增加处理时间。')
+            .addText(text => text
+                .setPlaceholder(String(DEFAULT_SETTINGS.maxPairsPerRequest))
+                .setValue(this.plugin.settings.maxPairsPerRequest.toString())
+                .onChange(async (value) => {
+                    this.plugin.settings.maxPairsPerRequest = parseInt(value) || DEFAULT_SETTINGS.maxPairsPerRequest;
+                    await this.plugin.saveSettings();
+                })
+            );
+            
+        new Setting(containerEl)
+            .setClass('jina-settings-block')
+            .setName('每个笔记在 AI 评分时的最大字符数')
+            .setDesc('限制发送给 AI 进行评分的每个笔记的最大字符数，以避免超出 API 限制。')
+            .addText(text => text
+                .setPlaceholder(String(DEFAULT_SETTINGS.maxCharsPerNote))
+                .setValue(this.plugin.settings.maxCharsPerNote.toString())
+                .onChange(async (value) => {
+                    this.plugin.settings.maxCharsPerNote = parseInt(value) || DEFAULT_SETTINGS.maxCharsPerNote;
+                    await this.plugin.saveSettings();
+                })
+            );
+            
+        new Setting(containerEl)
+            .setClass('jina-settings-block')
+            .setName('每次 API 请求的最大总字符数')
+            .setDesc('每次 API 批量请求的最大总字符数限制，以避免超出 API 的请求大小限制。')
+            .addText(text => text
+                .setPlaceholder(String(DEFAULT_SETTINGS.maxTotalCharsPerRequest))
+                .setValue(this.plugin.settings.maxTotalCharsPerRequest.toString())
+                .onChange(async (value) => {
+                    this.plugin.settings.maxTotalCharsPerRequest = parseInt(value) || DEFAULT_SETTINGS.maxTotalCharsPerRequest;
+                    await this.plugin.saveSettings();
+                })
+            );
+
+        // AI 评分提示词设置
+        containerEl.createEl('div', { cls: 'jina-settings-section', text: '' }).innerHTML = '<div class="jina-settings-section-title">AI 评分提示词设置</div>';
+        
+        new Setting(containerEl)
+            .setClass('jina-settings-block')
+            .setName('使用自定义评分提示词')
+            .setDesc('启用后将使用下方自定义的评分提示词，而非默认提示词。')
+            .addToggle(toggle => toggle
+                .setValue(this.plugin.settings.useCustomScoringPrompt)
+                .onChange(async (value) => {
+                    this.plugin.settings.useCustomScoringPrompt = value;
+                    await this.plugin.saveSettings();
+                    this.display(); // 重新渲染设置页面
+                })
+            );
+        
+        // 添加自定义提示词文本框
+        const promptContainer = containerEl.createEl('div', { cls: 'jina-settings-block' });
+        promptContainer.createEl('div', { 
+            text: '自定义评分提示词', 
+            cls: 'setting-item-name' 
+        });
+        
+        promptContainer.createEl('div', { 
+            text: '自定义AI评分的提示词和评分标准。将作为指令发送给AI模型以指导评分过程。', 
+            cls: 'setting-item-description' 
+        });
+        
+        const textareaContainer = promptContainer.createEl('div', { cls: 'jina-textarea-container' });
+        const textarea = textareaContainer.createEl('textarea', {
+            cls: 'jina-textarea',
+            attr: {
+                rows: '10',
+                placeholder: '在此输入自定义评分提示词...'
+            }
+        });
+        
+        textarea.value = this.plugin.settings.customScoringPrompt || DEFAULT_SCORING_PROMPT;
+        textarea.addEventListener('change', async () => {
+            this.plugin.settings.customScoringPrompt = textarea.value;
+            await this.plugin.saveSettings();
+        });
+        
+        // 添加恢复默认按钮
+        const buttonContainer = promptContainer.createEl('div', { cls: 'jina-button-container' });
+        const resetButton = buttonContainer.createEl('button', {
+            text: '恢复默认提示词',
+            cls: 'mod-warning'
+        });
+        
+        resetButton.addEventListener('click', async () => {
+            textarea.value = DEFAULT_SCORING_PROMPT;
+            this.plugin.settings.customScoringPrompt = DEFAULT_SCORING_PROMPT;
+            await this.plugin.saveSettings();
+            new Notice('已恢复默认评分提示词');
+        });
+        
+        // 如果没有启用自定义提示词，禁用相关控件
+        if (!this.plugin.settings.useCustomScoringPrompt) {
+            textarea.disabled = true;
+            resetButton.disabled = true;
+            textarea.classList.add('jina-disabled');
+            resetButton.classList.add('jina-disabled');
+        }
         
         // 链接插入与哈希设置
         containerEl.createEl('div', { cls: 'jina-settings-section', text: '' }).innerHTML = '<div class="jina-settings-section-title">链接插入设置</div>';
@@ -227,6 +334,9 @@ export class JinaLinkerSettingTab extends PluginSettingTab {
                 }));
         
         containerEl.createEl('div', { cls: 'jina-settings-section', text: '' }).innerHTML = '<div style="margin-top: 2em; color: var(--text-muted); font-size: 0.9em;">Jina AI Linker v' + this.plugin.manifest.version + '</div>';
+
+        // 添加自定义样式
+        this.addCustomStyles();
     }
 
     displayAIProviderSettings(containerEl: HTMLElement): void {
@@ -331,35 +441,6 @@ export class JinaLinkerSettingTab extends PluginSettingTab {
                 this.display(); // 重新渲染
             });
         }
-        
-        // 添加样式
-        const styleEl = containerEl.createEl('style');
-        styleEl.textContent = `
-            .jina-model-suggestions {
-                margin-top: 6px;
-                margin-bottom: 16px;
-                margin-left: 24px;
-            }
-            .jina-suggestion-label {
-                color: var(--text-muted);
-                margin-right: 8px;
-                font-size: 13px;
-            }
-            .jina-model-suggestion {
-                display: inline-block;
-                background-color: var(--interactive-accent);
-                color: var(--text-on-accent);
-                padding: 2px 8px;
-                border-radius: 4px;
-                margin-right: 8px;
-                margin-bottom: 8px;
-                font-size: 12px;
-                cursor: pointer;
-            }
-            .jina-model-suggestion:hover {
-                opacity: 0.85;
-            }
-        `;
     }
 
     getModelSuggestions(provider: AIProvider): string[] {
@@ -375,5 +456,76 @@ export class JinaLinkerSettingTab extends PluginSettingTab {
             default:
                 return [];
         }
+    }
+
+    addCustomStyles(): void {
+        const styleEl = document.createElement('style');
+        styleEl.id = 'jina-settings-custom-styles';
+        
+        // 如果已存在样式元素，则移除它
+        const existingStyle = document.getElementById('jina-settings-custom-styles');
+        if (existingStyle) {
+            existingStyle.remove();
+        }
+        
+        styleEl.textContent = `
+            .jina-textarea-container {
+                width: 100%;
+                margin-bottom: 10px;
+            }
+            
+            .jina-textarea {
+                width: 100%;
+                min-height: 200px;
+                border: 1px solid var(--background-modifier-border);
+                border-radius: 4px;
+                padding: 8px;
+                font-family: var(--font-monospace);
+                background-color: var(--background-primary);
+                color: var(--text-normal);
+                resize: vertical;
+            }
+            
+            .jina-button-container {
+                display: flex;
+                justify-content: flex-end;
+                margin-top: 8px;
+            }
+            
+            .jina-disabled {
+                opacity: 0.5;
+                cursor: not-allowed;
+            }
+            
+            .jina-model-suggestions {
+                margin-top: 6px;
+                margin-bottom: 16px;
+                margin-left: 24px;
+            }
+            
+            .jina-suggestion-label {
+                color: var(--text-muted);
+                margin-right: 8px;
+                font-size: 13px;
+            }
+            
+            .jina-model-suggestion {
+                display: inline-block;
+                background-color: var(--interactive-accent);
+                color: var(--text-on-accent);
+                padding: 2px 8px;
+                border-radius: 4px;
+                margin-right: 8px;
+                margin-bottom: 8px;
+                font-size: 12px;
+                cursor: pointer;
+            }
+            
+            .jina-model-suggestion:hover {
+                opacity: 0.85;
+            }
+        `;
+        
+        document.head.appendChild(styleEl);
     }
 }

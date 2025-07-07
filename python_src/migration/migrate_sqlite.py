@@ -31,12 +31,10 @@ def sqlite_to_json(db_path: str, json_output_path: str, output_dir_name: str = "
 
         metadata: Dict[str, str] = {k: v for k, v in cur.execute("SELECT key, value FROM metadata")}
 
-        file_id_to_path: Dict[int, str] = {fid: path for fid, path in cur.execute("SELECT id, file_path FROM file_paths")}
-
         ai_scores: Dict[str, Dict] = {}
         for (
-            source_id,
-            target_id,
+            src_path,
+            tgt_path,
             ai_score,
             jina_sim,
             last_scored,
@@ -44,15 +42,15 @@ def sqlite_to_json(db_path: str, json_output_path: str, output_dir_name: str = "
             key_type,
         ) in cur.execute(
             """
-            SELECT source_file_id, target_file_id, ai_score, jina_similarity, last_scored, relationship_key, key_type
+            SELECT source_path, target_path, ai_score, jina_similarity, last_scored, relationship_key, key_type
             FROM ai_relationships
             """
         ):
             if not rel_key:
-                rel_key = f"{file_id_to_path.get(source_id)}|{file_id_to_path.get(target_id)}"
+                rel_key = f"{src_path}|{tgt_path}"
             ai_scores[rel_key] = {
-                "source_path": file_id_to_path.get(source_id),
-                "target_path": file_id_to_path.get(target_id),
+                "source_path": src_path,
+                "target_path": tgt_path,
                 "ai_score": ai_score,
                 "jina_similarity": jina_sim,
                 "last_scored": last_scored or _dt.datetime.now().isoformat(),
@@ -231,11 +229,136 @@ def migrate_ai_scores_json_to_sqlite(project_root_abs: str, output_dir_abs: str)
     conn.close()
     logger.info("[成功] AI scores migration complete: %s rows", len(rows))
 
+def upgrade_ai_scores_schema(db_path: str) -> bool:
+    """升级AI评分数据库结构以支持新的ai_responses表。
+    
+    Args:
+        db_path: AI评分数据库路径
+        
+    Returns:
+        bool: 是否执行了升级操作
+    """
+    if not os.path.exists(db_path):
+        logger.warning("数据库文件不存在: %s，跳过结构升级", db_path)
+        return False
+    
+    logger.info(f"开始检查数据库结构: {db_path}")
+        
+    conn = get_db_connection(db_path)
+    cur = conn.cursor()
+    
+    try:
+        # ---- 无论如何都确保新列/新索引存在 ----
+        cur.execute("PRAGMA table_info(ai_relationships)")
+        existing_cols = {row[1] for row in cur.fetchall()}
+
+        # 新列
+        if "source_hash" not in existing_cols:
+            logger.info("添加 source_hash 列到 ai_relationships 表")
+            cur.execute("ALTER TABLE ai_relationships ADD COLUMN source_hash TEXT")
+        if "target_hash" not in existing_cols:
+            logger.info("添加 target_hash 列到 ai_relationships 表")
+            cur.execute("ALTER TABLE ai_relationships ADD COLUMN target_hash TEXT")
+        if "source_path" not in existing_cols:
+            logger.info("添加 source_path 列到 ai_relationships 表")
+            cur.execute("ALTER TABLE ai_relationships ADD COLUMN source_path TEXT")
+        if "target_path" not in existing_cols:
+            logger.info("添加 target_path 列到 ai_relationships 表")
+            cur.execute("ALTER TABLE ai_relationships ADD COLUMN target_path TEXT")
+
+        # 创建或替换新的唯一索引 (sqlite 不支持 ALTER UNIQUE, 需先尝试创建)
+        try:
+            cur.execute("CREATE UNIQUE INDEX idx_ai_relations_unique ON ai_relationships(source_path, target_path, source_hash, target_hash)")
+            logger.info("已创建 idx_ai_relations_unique 索引")
+        except sqlite3.OperationalError:
+            # 索引已存在
+            pass
+
+        # 检查ai_responses表是否存在
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='ai_responses'")
+        table_exists = cur.fetchone() is not None
+        
+        if not table_exists:
+            logger.info("升级AI评分数据库结构，添加ai_responses表...")
+            
+            # 创建ai_responses表
+            cur.execute("""
+            CREATE TABLE ai_responses (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                batch_id TEXT NOT NULL,          -- 批次ID，用于识别同一组请求的响应
+                ai_provider TEXT NOT NULL,       -- AI提供商名称
+                model_name TEXT NOT NULL,        -- 使用的模型名称
+                request_content TEXT,            -- 请求内容
+                response_content TEXT,           -- 完整的响应内容
+                prompt_type TEXT,                -- 提示词类型（默认/自定义）
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """)
+            
+            # 创建索引
+            cur.execute("CREATE INDEX idx_ai_responses_batch ON ai_responses(batch_id)")
+            
+            # 更新元数据
+            cur.execute(
+                "INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)",
+                ("schema_version", "1.1"),
+            )
+            
+            conn.commit()
+            logger.info("数据库结构升级成功: ai_responses表已创建")
+            
+            # 验证表是否成功创建
+            cur.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='ai_responses'")
+            if cur.fetchone()[0] == 1:
+                logger.info("验证成功: ai_responses表已存在")
+            else:
+                logger.error("验证失败: ai_responses表创建失败")
+            
+            # 若旧表使用 *_file_id 列而无 source_path，则迁移数据
+            if "source_path" not in existing_cols:
+                logger.info("迁移旧 ai_relationships 结构，添加 source_path/target_path 并填充")
+                cur.execute("ALTER TABLE ai_relationships ADD COLUMN source_path TEXT")
+                cur.execute("ALTER TABLE ai_relationships ADD COLUMN target_path TEXT")
+                # 回填数据
+                cur.execute(
+                    """
+                    UPDATE ai_relationships
+                    SET source_path = (
+                        SELECT file_path FROM file_paths WHERE id = ai_relationships.source_file_id
+                    ),
+                        target_path = (
+                        SELECT file_path FROM file_paths WHERE id = ai_relationships.target_file_id
+                    )
+                    WHERE source_path IS NULL OR target_path IS NULL
+                    """
+                )
+                conn.commit()
+            
+            return True
+        else:
+            logger.info("ai_responses表已存在，无需升级")
+            return False
+    
+    except Exception as e:
+        logger.error("升级数据库结构失败: %s", e)
+        import traceback
+        logger.error("详细错误: %s", traceback.format_exc())
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
 def run_migration_process(project_root_abs: str, output_dir_abs: str) -> None:
     """执行整体迁移流程。"""
     logger.info("[开始] Starting JSON -> SQLite migration (stub)...")
     migrate_embeddings_json_to_sqlite(project_root_abs, output_dir_abs)
     migrate_ai_scores_json_to_sqlite(project_root_abs, output_dir_abs)
+    
+    # 检查并升级AI评分数据库结构
+    ai_scores_db_path = os.path.join(output_dir_abs, DEFAULT_AI_SCORES_FILE_NAME)
+    if os.path.exists(ai_scores_db_path):
+        upgrade_ai_scores_schema(ai_scores_db_path)
+        
     logger.info("[完成] Migration process completed.")
 
 
@@ -243,5 +366,6 @@ __all__ = [
     "sqlite_to_json",
     "migrate_embeddings_json_to_sqlite",
     "migrate_ai_scores_json_to_sqlite",
+    "upgrade_ai_scores_schema",
     "run_migration_process",
 ]

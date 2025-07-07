@@ -23,7 +23,55 @@ export interface JinaLinkerSettings {
     minAiScoreForLinkInsertion: number;
     maxLinksToInsertPerNote: number;
     dataMigrationCompleted: boolean;
+    customScoringPrompt: string;
+    useCustomScoringPrompt: boolean;
+    // 批量处理设置
+    maxPairsPerRequest: number;   // 每次API请求的最大笔记对数
+    maxCharsPerNote: number;      // 每个笔记在AI评分时的最大字符数
+    maxTotalCharsPerRequest: number;  // 每次API请求的最大总字符数
 }
+
+// 默认评分提示词
+export const DEFAULT_SCORING_PROMPT = `作为笔记关联性评分专家，请评估以下多对内容的关联度。这些内容可能包括知识笔记、诗歌创作、灵感片段、散文、情感记录等多样化形式。对每对内容给出0-10的整数评分，基于以下全面标准：
+
+【评分标准：】
+10分 - 深度关联：
+  • 内容间存在明显的思想、情感或意象共鸣
+  • 一篇内容直接启发、延伸或回应另一篇
+  • 两篇形成完整的表达整体，共同构建一个更丰富的意境或思想
+  • 同时阅读会产生"啊哈"时刻，带来新的领悟
+
+8-9分 - 强烈关联：
+  • 共享核心情感、意象或主题
+  • 表达相似的思想但通过不同角度或形式
+  • 创作背景或灵感来源紧密相连
+  • 一篇可以深化对另一篇的理解和欣赏
+
+6-7分 - 明显关联：
+  • 存在清晰的主题或情绪连接
+  • 使用相似的意象或表达方式
+  • 关联点足够丰富，能激发新的思考
+  • 并置阅读能够丰富整体体验
+
+4-5分 - 中等关联：
+  • 有一些共通元素，但整体走向不同
+  • 某些片段或意象存在呼应，但不是主体
+  • 关联更加微妙或需要一定解读
+  • 链接可能对部分读者有启发价值
+
+2-3分 - 轻微关联：
+  • 关联仅限于表面术语或零星概念
+  • 主题、风格或情感基调大不相同
+  • 联系需要刻意寻找才能发现
+  • 链接价值有限，大多数读者难以察觉关联
+
+0-1分 - 几乎无关联：
+  • 内容、主题、意象几乎完全不同
+  • 无法找到明显的思想或情感连接
+  • 链接不会为读者理解任一内容增添价值
+  • 并置阅读无法产生有意义的关联或启发
+
+请只回复一个0-10的整数评分，不要有任何解释或额外文字！`;
 
 export const DEFAULT_SETTINGS: JinaLinkerSettings = {
     pythonPath: 'bin/jina-linker.exe',
@@ -31,7 +79,7 @@ export const DEFAULT_SETTINGS: JinaLinkerSettings = {
     aiModels: { ...DEFAULT_AI_MODELS },
     selectedAIProvider: 'deepseek',
     similarityThreshold: 0.70,
-    excludedFolders: '.obsidian, Scripts, assets, Excalidraw, .trash, Python-Templater-Plugin-Output',
+    excludedFolders: '.obsidian, Scripts, assets, Excalidraw, .trash, ',
     excludedFilesPatterns: '*excalidraw*, template*.md, *.kanban.md, ^moc$, ^index$',
     defaultScanPath: '/',
     jinaModelName: 'jina-embeddings-v3',
@@ -40,5 +88,11 @@ export const DEFAULT_SETTINGS: JinaLinkerSettings = {
     maxCandidatesPerSourceForAIScoring: 20,
     minAiScoreForLinkInsertion: 6,
     maxLinksToInsertPerNote: 10,
-    dataMigrationCompleted: false
+    dataMigrationCompleted: false,
+    customScoringPrompt: DEFAULT_SCORING_PROMPT,
+    useCustomScoringPrompt: false,
+    // 批量处理默认设置
+    maxPairsPerRequest: 10,
+    maxCharsPerNote: 2000,
+    maxTotalCharsPerRequest: 23000
 };

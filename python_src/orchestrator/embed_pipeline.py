@@ -35,13 +35,12 @@ def process_and_embed_notes(
     # 从数据库加载现有数据
     files_data_from_db: Dict[str, Dict] = {}
     cur.execute(
-        "SELECT file_path, content_hash, embedding, processed_content FROM file_embeddings"
+        "SELECT file_path, content_hash, embedding FROM file_embeddings"
     )
-    for fp, h, emb_blob, proc in cur.fetchall():
+    for fp, h, emb_blob in cur.fetchall():
         files_data_from_db[fp] = {
             "hash": h,
             "embedding": json.loads(emb_blob) if emb_blob else None,
-            "processed_content": proc,
         }
 
     embedded_count = 0
@@ -66,22 +65,27 @@ def process_and_embed_notes(
                 all_files_data_for_return.pop(rel_path, None)
                 continue
 
+            # 读取内容 - read_markdown_with_frontmatter 已经过滤了边界标记之后的内容
             body, fm, _ = read_markdown_with_frontmatter(abs_path)
+            
+            # 为了哈希计算，我们还是需要使用 extract_content_for_hashing
             content_to_hash = extract_content_for_hashing(body)
             if content_to_hash is None:
-                # 如果没有 boundary marker，则用整个 body
+                # 如果没有 boundary marker，就用整个 body
                 content_to_hash = body.rstrip("\r\n") + "\n"
+            
+            # 计算哈希
             content_hash = calculate_hash_from_content(content_to_hash)
+            
+            # 使用纯正文内容（没有哈希边界后的内容）进行嵌入处理
+            # 限制字符数量
             processed_content = body[:max_chars_for_jina_to_use]
 
             existing = files_data_from_db.get(rel_path)
 
-            stored_hash_fm = fm.get("jina_hash") if isinstance(fm, dict) else None
-
-            # 判断是否需要重新嵌入：front-matter 哈希与内容一致，且数据库已有同哈希嵌入
+            # 判断是否需要重新嵌入：数据库已存同哈希且有嵌入
             if (
-                stored_hash_fm == content_hash
-                and existing
+                existing
                 and existing["hash"] == content_hash
                 and existing["embedding"] is not None
             ):
@@ -93,7 +97,6 @@ def process_and_embed_notes(
                 {
                     "file_path": rel_path,
                     "content_hash": content_hash,
-                    "processed_content": processed_content,
                 }
             )
 
@@ -109,27 +112,21 @@ def process_and_embed_notes(
             rel_path = info["file_path"]
             cur.execute(
                 """
-                INSERT INTO file_embeddings (file_path, content_hash, embedding, processed_content, embedding_dimension, updated_at)
-                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                INSERT INTO file_embeddings (file_path, content_hash, embedding)
+                VALUES (?, ?, ?)
                 ON CONFLICT(file_path) DO UPDATE SET
-                    content_hash=excluded.content_hash,
-                    embedding=excluded.embedding,
-                    processed_content=excluded.processed_content,
-                    embedding_dimension=excluded.embedding_dimension,
-                    updated_at=CURRENT_TIMESTAMP
+                    content_hash = excluded.content_hash,
+                    embedding    = excluded.embedding
                 """,
                 (
                     rel_path,
                     info["content_hash"],
                     json.dumps(emb) if emb else None,
-                    info["processed_content"],
-                    len(emb) if emb else None,
                 ),
             )
             all_files_data_for_return[rel_path] = {
                 "hash": info["content_hash"],
                 "embedding": emb,
-                "processed_content": info["processed_content"],
             }
             if emb:
                 embedded_count += 1

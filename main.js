@@ -85,13 +85,53 @@ var DEFAULT_AI_MODELS = {
 };
 
 // models/settings.ts
+var DEFAULT_SCORING_PROMPT = `\u4F5C\u4E3A\u7B14\u8BB0\u5173\u8054\u6027\u8BC4\u5206\u4E13\u5BB6\uFF0C\u8BF7\u8BC4\u4F30\u4EE5\u4E0B\u591A\u5BF9\u5185\u5BB9\u7684\u5173\u8054\u5EA6\u3002\u8FD9\u4E9B\u5185\u5BB9\u53EF\u80FD\u5305\u62EC\u77E5\u8BC6\u7B14\u8BB0\u3001\u8BD7\u6B4C\u521B\u4F5C\u3001\u7075\u611F\u7247\u6BB5\u3001\u6563\u6587\u3001\u60C5\u611F\u8BB0\u5F55\u7B49\u591A\u6837\u5316\u5F62\u5F0F\u3002\u5BF9\u6BCF\u5BF9\u5185\u5BB9\u7ED9\u51FA0-10\u7684\u6574\u6570\u8BC4\u5206\uFF0C\u57FA\u4E8E\u4EE5\u4E0B\u5168\u9762\u6807\u51C6\uFF1A
+
+\u3010\u8BC4\u5206\u6807\u51C6\uFF1A\u3011
+10\u5206 - \u6DF1\u5EA6\u5173\u8054\uFF1A
+  \u2022 \u5185\u5BB9\u95F4\u5B58\u5728\u660E\u663E\u7684\u601D\u60F3\u3001\u60C5\u611F\u6216\u610F\u8C61\u5171\u9E23
+  \u2022 \u4E00\u7BC7\u5185\u5BB9\u76F4\u63A5\u542F\u53D1\u3001\u5EF6\u4F38\u6216\u56DE\u5E94\u53E6\u4E00\u7BC7
+  \u2022 \u4E24\u7BC7\u5F62\u6210\u5B8C\u6574\u7684\u8868\u8FBE\u6574\u4F53\uFF0C\u5171\u540C\u6784\u5EFA\u4E00\u4E2A\u66F4\u4E30\u5BCC\u7684\u610F\u5883\u6216\u601D\u60F3
+  \u2022 \u540C\u65F6\u9605\u8BFB\u4F1A\u4EA7\u751F"\u554A\u54C8"\u65F6\u523B\uFF0C\u5E26\u6765\u65B0\u7684\u9886\u609F
+
+8-9\u5206 - \u5F3A\u70C8\u5173\u8054\uFF1A
+  \u2022 \u5171\u4EAB\u6838\u5FC3\u60C5\u611F\u3001\u610F\u8C61\u6216\u4E3B\u9898
+  \u2022 \u8868\u8FBE\u76F8\u4F3C\u7684\u601D\u60F3\u4F46\u901A\u8FC7\u4E0D\u540C\u89D2\u5EA6\u6216\u5F62\u5F0F
+  \u2022 \u521B\u4F5C\u80CC\u666F\u6216\u7075\u611F\u6765\u6E90\u7D27\u5BC6\u76F8\u8FDE
+  \u2022 \u4E00\u7BC7\u53EF\u4EE5\u6DF1\u5316\u5BF9\u53E6\u4E00\u7BC7\u7684\u7406\u89E3\u548C\u6B23\u8D4F
+
+6-7\u5206 - \u660E\u663E\u5173\u8054\uFF1A
+  \u2022 \u5B58\u5728\u6E05\u6670\u7684\u4E3B\u9898\u6216\u60C5\u7EEA\u8FDE\u63A5
+  \u2022 \u4F7F\u7528\u76F8\u4F3C\u7684\u610F\u8C61\u6216\u8868\u8FBE\u65B9\u5F0F
+  \u2022 \u5173\u8054\u70B9\u8DB3\u591F\u4E30\u5BCC\uFF0C\u80FD\u6FC0\u53D1\u65B0\u7684\u601D\u8003
+  \u2022 \u5E76\u7F6E\u9605\u8BFB\u80FD\u591F\u4E30\u5BCC\u6574\u4F53\u4F53\u9A8C
+
+4-5\u5206 - \u4E2D\u7B49\u5173\u8054\uFF1A
+  \u2022 \u6709\u4E00\u4E9B\u5171\u901A\u5143\u7D20\uFF0C\u4F46\u6574\u4F53\u8D70\u5411\u4E0D\u540C
+  \u2022 \u67D0\u4E9B\u7247\u6BB5\u6216\u610F\u8C61\u5B58\u5728\u547C\u5E94\uFF0C\u4F46\u4E0D\u662F\u4E3B\u4F53
+  \u2022 \u5173\u8054\u66F4\u52A0\u5FAE\u5999\u6216\u9700\u8981\u4E00\u5B9A\u89E3\u8BFB
+  \u2022 \u94FE\u63A5\u53EF\u80FD\u5BF9\u90E8\u5206\u8BFB\u8005\u6709\u542F\u53D1\u4EF7\u503C
+
+2-3\u5206 - \u8F7B\u5FAE\u5173\u8054\uFF1A
+  \u2022 \u5173\u8054\u4EC5\u9650\u4E8E\u8868\u9762\u672F\u8BED\u6216\u96F6\u661F\u6982\u5FF5
+  \u2022 \u4E3B\u9898\u3001\u98CE\u683C\u6216\u60C5\u611F\u57FA\u8C03\u5927\u4E0D\u76F8\u540C
+  \u2022 \u8054\u7CFB\u9700\u8981\u523B\u610F\u5BFB\u627E\u624D\u80FD\u53D1\u73B0
+  \u2022 \u94FE\u63A5\u4EF7\u503C\u6709\u9650\uFF0C\u5927\u591A\u6570\u8BFB\u8005\u96BE\u4EE5\u5BDF\u89C9\u5173\u8054
+
+0-1\u5206 - \u51E0\u4E4E\u65E0\u5173\u8054\uFF1A
+  \u2022 \u5185\u5BB9\u3001\u4E3B\u9898\u3001\u610F\u8C61\u51E0\u4E4E\u5B8C\u5168\u4E0D\u540C
+  \u2022 \u65E0\u6CD5\u627E\u5230\u660E\u663E\u7684\u601D\u60F3\u6216\u60C5\u611F\u8FDE\u63A5
+  \u2022 \u94FE\u63A5\u4E0D\u4F1A\u4E3A\u8BFB\u8005\u7406\u89E3\u4EFB\u4E00\u5185\u5BB9\u589E\u6DFB\u4EF7\u503C
+  \u2022 \u5E76\u7F6E\u9605\u8BFB\u65E0\u6CD5\u4EA7\u751F\u6709\u610F\u4E49\u7684\u5173\u8054\u6216\u542F\u53D1
+
+\u8BF7\u53EA\u56DE\u590D\u4E00\u4E2A0-10\u7684\u6574\u6570\u8BC4\u5206\uFF0C\u4E0D\u8981\u6709\u4EFB\u4F55\u89E3\u91CA\u6216\u989D\u5916\u6587\u5B57\uFF01`;
 var DEFAULT_SETTINGS = {
   pythonPath: "bin/jina-linker.exe",
   jinaApiKey: "",
   aiModels: { ...DEFAULT_AI_MODELS },
   selectedAIProvider: "deepseek",
   similarityThreshold: 0.7,
-  excludedFolders: ".obsidian, Scripts, assets, Excalidraw, .trash, Python-Templater-Plugin-Output",
+  excludedFolders: ".obsidian, Scripts, assets, Excalidraw, .trash, ",
   excludedFilesPatterns: "*excalidraw*, template*.md, *.kanban.md, ^moc$, ^index$",
   defaultScanPath: "/",
   jinaModelName: "jina-embeddings-v3",
@@ -100,7 +140,13 @@ var DEFAULT_SETTINGS = {
   maxCandidatesPerSourceForAIScoring: 20,
   minAiScoreForLinkInsertion: 6,
   maxLinksToInsertPerNote: 10,
-  dataMigrationCompleted: false
+  dataMigrationCompleted: false,
+  customScoringPrompt: DEFAULT_SCORING_PROMPT,
+  useCustomScoringPrompt: false,
+  // 批量处理默认设置
+  maxPairsPerRequest: 10,
+  maxCharsPerNote: 2e3,
+  maxTotalCharsPerRequest: 23e3
 };
 
 // utils/performance-monitor.ts
@@ -377,6 +423,12 @@ var PythonBridge = class {
           this.settings.maxCharsForJina.toString(),
           "--max_content_length_for_ai",
           this.settings.maxContentLengthForAI.toString(),
+          "--ai_scoring_batch_size",
+          this.settings.maxPairsPerRequest.toString(),
+          "--max_chars_per_note",
+          this.settings.maxCharsPerNote.toString(),
+          "--max_total_chars_per_request",
+          this.settings.maxTotalCharsPerRequest.toString(),
           "--export_json"
         ];
         const selectedAIModel = this.settings.aiModels[this.settings.selectedAIProvider];
@@ -385,6 +437,10 @@ var PythonBridge = class {
           args.push("--ai_api_url", selectedAIModel.apiUrl);
           args.push("--ai_api_key", selectedAIModel.apiKey);
           args.push("--ai_model_name", selectedAIModel.modelName);
+        }
+        if (this.settings.useCustomScoringPrompt) {
+          args.push("--use_custom_scoring_prompt");
+          args.push("--custom_scoring_prompt", this.settings.customScoringPrompt);
         }
         if (scanPathFromModal && scanPathFromModal.trim() !== "/") {
           args.push("--scan_target_folders");
@@ -791,23 +847,13 @@ var LinkManager = class {
   }
   // 从JSON数据中获取AI评分候选
   getAICandidatesFromJSON(filePath, aiScoresData) {
+    var _a;
     try {
-      const aiScores = (aiScoresData == null ? void 0 : aiScoresData.ai_scores) || {};
-      const candidates = [];
-      for (const [key, scoreEntry] of Object.entries(aiScores)) {
-        if (typeof scoreEntry === "object" && scoreEntry !== null) {
-          const entry = scoreEntry;
-          if (entry.source_path === filePath && entry.ai_score >= this.settings.minAiScoreForLinkInsertion) {
-            candidates.push({
-              targetPath: entry.target_path,
-              aiScore: entry.ai_score,
-              jinaScore: entry.jina_similarity
-            });
-          }
-        }
-      }
-      candidates.sort((a, b) => (b.aiScore || 0) - (a.aiScore || 0));
-      return candidates.slice(0, this.settings.maxLinksToInsertPerNote);
+      const bySource = (aiScoresData == null ? void 0 : aiScoresData.ai_scores_by_source) || {};
+      const rawList = bySource[filePath] || [];
+      const minScore = (_a = this.settings.minAiScoreForLinkInsertion) != null ? _a : 0;
+      const candidates = rawList.filter(([_, score]) => (score || 0) >= minScore).slice(0, this.settings.maxLinksToInsertPerNote).map(([targetPath, score]) => ({ targetPath, aiScore: score }));
+      return candidates;
     } catch (error) {
       log("error", `\u4ECEJSON\u83B7\u53D6AI\u5019\u9009\u65F6\u53D1\u751F\u9519\u8BEF`, error);
       return [];
@@ -1125,7 +1171,7 @@ var JinaLinkerSettingTab = class extends import_obsidian7.PluginSettingTab {
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian7.Setting(containerEl).setClass("jina-settings-block").setName("AI \u8BC4\u5206\u5185\u5BB9\u6700\u5927\u957F\u5EA6").setDesc("\u4F20\u9012\u7ED9 DeepSeek API \u8FDB\u884C\u8BC4\u5206\u7684\u6BCF\u6761\u7B14\u8BB0\u5185\u5BB9\u7684\u6700\u5927\u5B57\u7B26\u6570\u3002").addText(
+    new import_obsidian7.Setting(containerEl).setClass("jina-settings-block").setName("AI \u8BC4\u5206\u5185\u5BB9\u6700\u5927\u957F\u5EA6").setDesc("\u4F20\u9012\u7ED9 AI API \u8FDB\u884C\u8BC4\u5206\u7684\u6BCF\u6761\u7B14\u8BB0\u5185\u5BB9\u7684\u6700\u5927\u5B57\u7B26\u6570\u3002").addText(
       (text) => text.setPlaceholder(String(DEFAULT_SETTINGS.maxContentLengthForAI)).setValue(this.plugin.settings.maxContentLengthForAI.toString()).onChange(async (value) => {
         this.plugin.settings.maxContentLengthForAI = parseInt(value) || DEFAULT_SETTINGS.maxContentLengthForAI;
         await this.plugin.saveSettings();
@@ -1137,6 +1183,72 @@ var JinaLinkerSettingTab = class extends import_obsidian7.PluginSettingTab {
         await this.plugin.saveSettings();
       })
     );
+    containerEl.createEl("div", { cls: "jina-settings-section", text: "" }).innerHTML = '<div class="jina-settings-section-title">AI \u6279\u91CF\u5904\u7406\u53C2\u6570</div>';
+    new import_obsidian7.Setting(containerEl).setClass("jina-settings-block").setName("\u6BCF\u6B21 API \u8BF7\u6C42\u7684\u6700\u5927\u7B14\u8BB0\u5BF9\u6570").setDesc("\u6BCF\u6B21\u5411 AI \u670D\u52A1\u53D1\u9001\u8BF7\u6C42\u65F6\uFF0C\u6700\u591A\u5305\u542B\u7684\u7B14\u8BB0\u5BF9\u6570\u91CF\u3002\u589E\u52A0\u53EF\u51CF\u5C11 API \u8C03\u7528\u6B21\u6570\uFF0C\u4F46\u53EF\u80FD\u589E\u52A0\u5904\u7406\u65F6\u95F4\u3002").addText(
+      (text) => text.setPlaceholder(String(DEFAULT_SETTINGS.maxPairsPerRequest)).setValue(this.plugin.settings.maxPairsPerRequest.toString()).onChange(async (value) => {
+        this.plugin.settings.maxPairsPerRequest = parseInt(value) || DEFAULT_SETTINGS.maxPairsPerRequest;
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian7.Setting(containerEl).setClass("jina-settings-block").setName("\u6BCF\u4E2A\u7B14\u8BB0\u5728 AI \u8BC4\u5206\u65F6\u7684\u6700\u5927\u5B57\u7B26\u6570").setDesc("\u9650\u5236\u53D1\u9001\u7ED9 AI \u8FDB\u884C\u8BC4\u5206\u7684\u6BCF\u4E2A\u7B14\u8BB0\u7684\u6700\u5927\u5B57\u7B26\u6570\uFF0C\u4EE5\u907F\u514D\u8D85\u51FA API \u9650\u5236\u3002").addText(
+      (text) => text.setPlaceholder(String(DEFAULT_SETTINGS.maxCharsPerNote)).setValue(this.plugin.settings.maxCharsPerNote.toString()).onChange(async (value) => {
+        this.plugin.settings.maxCharsPerNote = parseInt(value) || DEFAULT_SETTINGS.maxCharsPerNote;
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian7.Setting(containerEl).setClass("jina-settings-block").setName("\u6BCF\u6B21 API \u8BF7\u6C42\u7684\u6700\u5927\u603B\u5B57\u7B26\u6570").setDesc("\u6BCF\u6B21 API \u6279\u91CF\u8BF7\u6C42\u7684\u6700\u5927\u603B\u5B57\u7B26\u6570\u9650\u5236\uFF0C\u4EE5\u907F\u514D\u8D85\u51FA API \u7684\u8BF7\u6C42\u5927\u5C0F\u9650\u5236\u3002").addText(
+      (text) => text.setPlaceholder(String(DEFAULT_SETTINGS.maxTotalCharsPerRequest)).setValue(this.plugin.settings.maxTotalCharsPerRequest.toString()).onChange(async (value) => {
+        this.plugin.settings.maxTotalCharsPerRequest = parseInt(value) || DEFAULT_SETTINGS.maxTotalCharsPerRequest;
+        await this.plugin.saveSettings();
+      })
+    );
+    containerEl.createEl("div", { cls: "jina-settings-section", text: "" }).innerHTML = '<div class="jina-settings-section-title">AI \u8BC4\u5206\u63D0\u793A\u8BCD\u8BBE\u7F6E</div>';
+    new import_obsidian7.Setting(containerEl).setClass("jina-settings-block").setName("\u4F7F\u7528\u81EA\u5B9A\u4E49\u8BC4\u5206\u63D0\u793A\u8BCD").setDesc("\u542F\u7528\u540E\u5C06\u4F7F\u7528\u4E0B\u65B9\u81EA\u5B9A\u4E49\u7684\u8BC4\u5206\u63D0\u793A\u8BCD\uFF0C\u800C\u975E\u9ED8\u8BA4\u63D0\u793A\u8BCD\u3002").addToggle(
+      (toggle) => toggle.setValue(this.plugin.settings.useCustomScoringPrompt).onChange(async (value) => {
+        this.plugin.settings.useCustomScoringPrompt = value;
+        await this.plugin.saveSettings();
+        this.display();
+      })
+    );
+    const promptContainer = containerEl.createEl("div", { cls: "jina-settings-block" });
+    promptContainer.createEl("div", {
+      text: "\u81EA\u5B9A\u4E49\u8BC4\u5206\u63D0\u793A\u8BCD",
+      cls: "setting-item-name"
+    });
+    promptContainer.createEl("div", {
+      text: "\u81EA\u5B9A\u4E49AI\u8BC4\u5206\u7684\u63D0\u793A\u8BCD\u548C\u8BC4\u5206\u6807\u51C6\u3002\u5C06\u4F5C\u4E3A\u6307\u4EE4\u53D1\u9001\u7ED9AI\u6A21\u578B\u4EE5\u6307\u5BFC\u8BC4\u5206\u8FC7\u7A0B\u3002",
+      cls: "setting-item-description"
+    });
+    const textareaContainer = promptContainer.createEl("div", { cls: "jina-textarea-container" });
+    const textarea = textareaContainer.createEl("textarea", {
+      cls: "jina-textarea",
+      attr: {
+        rows: "10",
+        placeholder: "\u5728\u6B64\u8F93\u5165\u81EA\u5B9A\u4E49\u8BC4\u5206\u63D0\u793A\u8BCD..."
+      }
+    });
+    textarea.value = this.plugin.settings.customScoringPrompt || DEFAULT_SCORING_PROMPT;
+    textarea.addEventListener("change", async () => {
+      this.plugin.settings.customScoringPrompt = textarea.value;
+      await this.plugin.saveSettings();
+    });
+    const buttonContainer = promptContainer.createEl("div", { cls: "jina-button-container" });
+    const resetButton = buttonContainer.createEl("button", {
+      text: "\u6062\u590D\u9ED8\u8BA4\u63D0\u793A\u8BCD",
+      cls: "mod-warning"
+    });
+    resetButton.addEventListener("click", async () => {
+      textarea.value = DEFAULT_SCORING_PROMPT;
+      this.plugin.settings.customScoringPrompt = DEFAULT_SCORING_PROMPT;
+      await this.plugin.saveSettings();
+      new import_obsidian7.Notice("\u5DF2\u6062\u590D\u9ED8\u8BA4\u8BC4\u5206\u63D0\u793A\u8BCD");
+    });
+    if (!this.plugin.settings.useCustomScoringPrompt) {
+      textarea.disabled = true;
+      resetButton.disabled = true;
+      textarea.classList.add("jina-disabled");
+      resetButton.classList.add("jina-disabled");
+    }
     containerEl.createEl("div", { cls: "jina-settings-section", text: "" }).innerHTML = '<div class="jina-settings-section-title">\u94FE\u63A5\u63D2\u5165\u8BBE\u7F6E</div>';
     new import_obsidian7.Setting(containerEl).setClass("jina-settings-block").setName("\u94FE\u63A5\u63D2\u5165\u7684\u6700\u5C0F AI \u5206\u6570").setDesc("\u53EA\u6709 AI \u8BC4\u5206\u5927\u4E8E\u6216\u7B49\u4E8E\u6B64\u503C\u7684\u5019\u9009\u94FE\u63A5\u624D\u4F1A\u88AB\u63D2\u5165\u5230\u7B14\u8BB0\u4E2D\u3002").addText(
       (text) => text.setPlaceholder(String(DEFAULT_SETTINGS.minAiScoreForLinkInsertion)).setValue(this.plugin.settings.minAiScoreForLinkInsertion.toString()).onChange(async (value) => {
@@ -1163,6 +1275,7 @@ var JinaLinkerSettingTab = class extends import_obsidian7.PluginSettingTab {
       this.plugin.cancelCurrentOperation();
     }));
     containerEl.createEl("div", { cls: "jina-settings-section", text: "" }).innerHTML = '<div style="margin-top: 2em; color: var(--text-muted); font-size: 0.9em;">Jina AI Linker v' + this.plugin.manifest.version + "</div>";
+    this.addCustomStyles();
   }
   displayAIProviderSettings(containerEl) {
     const selectedProvider = this.plugin.settings.selectedAIProvider;
@@ -1224,33 +1337,6 @@ var JinaLinkerSettingTab = class extends import_obsidian7.PluginSettingTab {
         this.display();
       });
     }
-    const styleEl = containerEl.createEl("style");
-    styleEl.textContent = `
-            .jina-model-suggestions {
-                margin-top: 6px;
-                margin-bottom: 16px;
-                margin-left: 24px;
-            }
-            .jina-suggestion-label {
-                color: var(--text-muted);
-                margin-right: 8px;
-                font-size: 13px;
-            }
-            .jina-model-suggestion {
-                display: inline-block;
-                background-color: var(--interactive-accent);
-                color: var(--text-on-accent);
-                padding: 2px 8px;
-                border-radius: 4px;
-                margin-right: 8px;
-                margin-bottom: 8px;
-                font-size: 12px;
-                cursor: pointer;
-            }
-            .jina-model-suggestion:hover {
-                opacity: 0.85;
-            }
-        `;
   }
   getModelSuggestions(provider) {
     switch (provider) {
@@ -1265,6 +1351,72 @@ var JinaLinkerSettingTab = class extends import_obsidian7.PluginSettingTab {
       default:
         return [];
     }
+  }
+  addCustomStyles() {
+    const styleEl = document.createElement("style");
+    styleEl.id = "jina-settings-custom-styles";
+    const existingStyle = document.getElementById("jina-settings-custom-styles");
+    if (existingStyle) {
+      existingStyle.remove();
+    }
+    styleEl.textContent = `
+            .jina-textarea-container {
+                width: 100%;
+                margin-bottom: 10px;
+            }
+            
+            .jina-textarea {
+                width: 100%;
+                min-height: 200px;
+                border: 1px solid var(--background-modifier-border);
+                border-radius: 4px;
+                padding: 8px;
+                font-family: var(--font-monospace);
+                background-color: var(--background-primary);
+                color: var(--text-normal);
+                resize: vertical;
+            }
+            
+            .jina-button-container {
+                display: flex;
+                justify-content: flex-end;
+                margin-top: 8px;
+            }
+            
+            .jina-disabled {
+                opacity: 0.5;
+                cursor: not-allowed;
+            }
+            
+            .jina-model-suggestions {
+                margin-top: 6px;
+                margin-bottom: 16px;
+                margin-left: 24px;
+            }
+            
+            .jina-suggestion-label {
+                color: var(--text-muted);
+                margin-right: 8px;
+                font-size: 13px;
+            }
+            
+            .jina-model-suggestion {
+                display: inline-block;
+                background-color: var(--interactive-accent);
+                color: var(--text-on-accent);
+                padding: 2px 8px;
+                border-radius: 4px;
+                margin-right: 8px;
+                margin-bottom: 8px;
+                font-size: 12px;
+                cursor: pointer;
+            }
+            
+            .jina-model-suggestion:hover {
+                opacity: 0.85;
+            }
+        `;
+    document.head.appendChild(styleEl);
   }
 };
 

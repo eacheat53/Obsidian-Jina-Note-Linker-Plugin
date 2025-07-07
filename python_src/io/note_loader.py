@@ -21,9 +21,13 @@ logger = get_logger(__name__)
 
 def read_markdown_with_frontmatter(file_path: str) -> Tuple[str, Dict, str]:
     """读取 Markdown 文件并分离 front-matter 与正文。
+    
+    同时处理 HASH_BOUNDARY_MARKER，只返回边界标记之前的正文内容。
 
     返回 (body_content, frontmatter_dict, raw_frontmatter_str)。
     若文件不含 front-matter，则字典与字符串均为空。"""
+    from python_src.hash_utils.hasher import HASH_BOUNDARY_MARKER
+    
     path = Path(file_path)
     if not path.exists():
         raise FileNotFoundError(file_path)
@@ -47,7 +51,12 @@ def read_markdown_with_frontmatter(file_path: str) -> Tuple[str, Dict, str]:
             except yaml.YAMLError as exc:
                 logger.warning("解析 front-matter 失败 (%s): %s", file_path, exc)
                 frontmatter_dict = {}
-
+    
+    # 处理哈希边界标记，只保留边界标记之前的内容
+    boundary_idx = body_content.find(HASH_BOUNDARY_MARKER)
+    if boundary_idx != -1:
+        body_content = body_content[:boundary_idx].rstrip()
+    
     return body_content, frontmatter_dict, frontmatter_str
 
 

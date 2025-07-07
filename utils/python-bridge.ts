@@ -71,6 +71,9 @@ export class PythonBridge {
                     '--jina_model_name', this.settings.jinaModelName,
                     '--max_chars_for_jina', this.settings.maxCharsForJina.toString(),
                     '--max_content_length_for_ai', this.settings.maxContentLengthForAI.toString(),
+                    '--ai_scoring_batch_size', this.settings.maxPairsPerRequest.toString(),
+                    '--max_chars_per_note', this.settings.maxCharsPerNote.toString(),
+                    '--max_total_chars_per_request', this.settings.maxTotalCharsPerRequest.toString(),
                     '--export_json'
                 ];
                 
@@ -81,6 +84,12 @@ export class PythonBridge {
                     args.push('--ai_api_url', selectedAIModel.apiUrl);
                     args.push('--ai_api_key', selectedAIModel.apiKey);
                     args.push('--ai_model_name', selectedAIModel.modelName);
+                }
+                
+                // 添加自定义评分提示词设置
+                if (this.settings.useCustomScoringPrompt) {
+                    args.push('--use_custom_scoring_prompt');
+                    args.push('--custom_scoring_prompt', this.settings.customScoringPrompt);
                 }
                 
                 // 添加扫描路径

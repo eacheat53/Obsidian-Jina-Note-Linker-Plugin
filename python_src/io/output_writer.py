@@ -95,21 +95,44 @@ def export_ai_scores_to_json(
     output_dir_abs: str,
     export_dir_name: str = ".jina-linker",
 ) -> None:
-    """导出 AI 评分数据为 JSON（旧版兼容）。只导出AI评分，不导出嵌入数据。"""
+    """导出 AI 评分数据为 JSON（新格式：ai_scores_by_source）。"""
     logger.info("[导出] 正在导出 AI 评分数据到 JSON...")
 
     json_dir = Path(project_root_abs) / export_dir_name
     json_dir.mkdir(parents=True, exist_ok=True)
 
-    # AI scores
     ai_scores_db = Path(output_dir_abs) / DEFAULT_AI_SCORES_FILE_NAME
     ai_scores_json = json_dir / "ai_scores.json"
-    if ai_scores_db.exists():
-        sqlite_to_json(str(ai_scores_db), str(ai_scores_json), export_dir_name)
-    else:
-        logger.warning("[警告] AI 评分数据库不存在: %s", ai_scores_db)
+    if not ai_scores_db.exists():
+        logger.warning("AI scores DB 不存在: %s", ai_scores_db)
+        return
 
-    logger.info("[完成] AI 评分数据 JSON 导出完成！")
+    # 读取并分组
+    conn = sqlite3.connect(ai_scores_db)
+    cur = conn.cursor()
+    min_score = 7
+    source_map: Dict[str, list] = {}
+    for src, tgt, score in cur.execute(
+        "SELECT source_path, target_path, ai_score FROM ai_relationships WHERE ai_score >= ?",
+        (min_score,),
+    ):
+        source_map.setdefault(src, []).append([tgt, score])
+
+    # 按分数排序（降序）
+    for lst in source_map.values():
+        lst.sort(key=lambda x: x[1], reverse=True)
+
+    output = {
+        "_metadata": {
+            "description": "AI scores (grouped by source)",
+            "exported_from": ai_scores_db.name,
+        },
+        "ai_scores_by_source": source_map,
+    }
+
+    ai_scores_json.write_text(json.dumps(output, ensure_ascii=False, indent=2), encoding="utf-8")
+    conn.close()
+    logger.info("[成功] 导出 %s 源笔记的 AI 评分", len(source_map))
 
 
 __all__ = [
