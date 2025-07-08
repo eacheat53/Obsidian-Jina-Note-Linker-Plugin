@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "obsidian-jina-linker"
+version = "0.1.0"
+description = "Jina-based Obsidian plugin backend helpers"
+authors = [{ name = "Your Name", email = "you@example.com" }]
+readme = "README.md"
+requires-python = ">=3.9"
+
+# 核心依赖，与 requirements.txt 保持一致
+dependencies = [
+    "numpy>=1.23",
+    "PyYAML>=6.0",
+    "requests>=2.31",
+]
+
+[project.optional-dependencies]
+# 开发/测试依赖
+dev = [
+    "pytest>=7.4",
+]
+
+[tool.setuptools]
+# 使用默认包目录，让 python_src 本身作为顶级包被发现。
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["python_src", "python_src.*"] 

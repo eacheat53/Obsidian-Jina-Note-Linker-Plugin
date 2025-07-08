@@ -1,188 +1,117 @@
-# Jina AI Linker 
+# Jina AI Linker 插件
 
-![Jina AI Linker 插件预览](images/1.png)
-![Jina AI Linker 插件预览](images/2.png)
-![Jina AI Linker 插件预览](images/3.png)
+> 为 **Obsidian** 打造的 AI 级链接推荐助手，基于 **Jina Embeddings** 与多家 LLM 服务，为你的笔记自动建立知识网络。
 
-## 功能介绍
+![Jina AI Linker 预览](images/1.png)
+![Jina AI Linker 预览](images/2.png)
+![Jina AI Linker 预览](images/3.png)
 
-Jina AI Linker是一个强大的Obsidian插件，专为知识库管理而设计。通过利用Jina AI的先进嵌入技术和AI智能评分能力，实现笔记之间的智能链接推荐，帮助你在知识间建立更有意义的连接。
-
-### 核心功能
-
-- **AI智能链接推荐**：分析笔记内容，自动推荐相关度高的笔记链接
-- **嵌入向量相似度匹配**：利用Jina AI技术计算笔记内容的语义相似度
-- **多AI提供商支持**：支持DeepSeek、OpenAI、Claude、Gemini等多种AI模型进行智能评分
-- **灵活的AI配置**：用户可自由选择AI提供商，配置API密钥和模型参数
-- **智能链接插入**：基于AI评分自动在笔记中插入高质量的建议链接
-- **内容哈希追踪**：通过内容哈希检测笔记变更，智能更新链接建议
-- **安全的密钥管理**：API密钥安全存储，支持密码隐藏显示
-
-## 安装方法
-
-
-1. 从[GitHub Releases](https://github.com/eacheat53/Jina-AI-Linker/releases)下载最新版本
-2. 将压缩包解压到您的Obsidian仓库的`.obsidian/plugins/`目录下
-3. 在Obsidian中启用插件
-
-## 使用方法
-
-### 前提条件
-
-1. 安装Python（3.8或更高版本）
-2. 获取[Jina AI API密钥](https://jina.ai)（必需）
-3. 获取至少一个AI提供商的API密钥（用于智能评分）：
-   - [DeepSeek API密钥](https://deepseek.ai)（推荐，性价比高）
-   - [OpenAI API密钥](https://openai.com)（GPT模型）
-   - [Claude API密钥](https://anthropic.com)（Anthropic）
-   - [Gemini API密钥](https://ai.google.dev)（Google）
-   - 或其他OpenAI兼容的API服务
-
-### 基本使用流程
-
-#### 首次使用（新用户）
-1. 在Obsidian仓库中创建并编写笔记
-2. 点击Obsidian左侧栏中的Jina Linker图标，选择"批量添加哈希边界标记"
-3. 选择要处理的文件夹或留空处理所有文件，为笔记添加`<!-- HASH_BOUNDARY -->`标记
-4. 在插件设置中配置Jina API密钥和选择AI提供商
-
-#### 日常使用
-1. 点击Obsidian左侧栏中的Jina Linker图标
-2. 选择"处理笔记并插入建议链接"
-3. 在弹出的对话框中选择需要处理的文件夹和AI评分模式
-4. 等待处理完成（大型仓库可能需要一些时间）
-5. 插件会自动在笔记中插入基于AI评分的建议链接（AI评分数据保存在JSON文件中，不写入YAML frontmatter）
-
-#### 新笔记处理
-- 对于新创建的笔记，建议使用Templater模板自动添加`<!-- HASH_BOUNDARY -->`标记
-- 或者手动在笔记内容末尾添加该标记
-
-### 哈希边界标记
-
-哈希边界标记`<!-- HASH_BOUNDARY -->`用于界定笔记的有效内容范围。此标记之前的内容会被用于生成嵌入和计算哈希，之后的内容（包括建议链接）不会被处理。建议将此标记放在笔记主体内容的末尾处。
-
-示例：
-```markdown
----
-title: 示例笔记
-date: 2023-01-01
 ---
 
-# 示例笔记
+## 功能特性
 
-这是笔记的主体内容，会被用于生成嵌入和计算哈希。
+| 模块 | 亮点 |
+|------|------|
+| 嵌入生成 | • 调用 **Jina AI Cloud Embeddings**\
+| 链接候选 | • NumPy 批量计算余弦相似度，生成高效候选集 |
+| AI 智能评分 | • 支持 **OpenAI / DeepSeek / Claude / Gemini / 任意 OpenAI-兼容 API**\
+| 建议链接插入 | • 基于阈值自动写回 Markdown\
+| 内容追踪 | • `<!-- HASH_BOUNDARY -->` 哈希边界避免重复处理 |
+| 多端存储 | • 嵌入 / AI 评分结果独立 JSON 文件，笔记保持纯净 |
+| 可扩展 | • Python 与 TypeScript 解耦，易于二次开发 |
 
-<!-- HASH_BOUNDARY -->
+---
 
-## 建议链接
-<!-- LINKS_START -->
-- [[相关笔记1]]
-- [[相关笔记2]]
-<!-- LINKS_END -->
+## 快速上手（普通用户）
 
-## 备注
-<!-- HASH_BOUNDARY -->之后内容不会被用于生成嵌入和计算哈希。
+### 1. 安装插件
+
+1. 前往 [Releases](https://github.com/eacheat53/Jina-AI-Linker/releases) 下载最新 `zip`。
+2. 解压到仓库的 `.obsidian/plugins/` 目录。
+3. 打开 Obsidian → 设置 → 第三方插件 → 启用 **Jina AI Linker**。
+
+### 2. 准备 API Key
+
+| 服务 | 用途 | 申请地址 |
+|------|------|-----------|
+| **Jina AI Cloud** | 生成文本嵌入 | <https://jina.ai> |
+| **LLM 提供商** | 生成 AI 相关度分 | DeepSeek / OpenAI / Claude / Gemini / 兼容服务（任选其一） |
+
+### 3. 首次运行流程
+
+1. 打开侧边栏图标，执行「批量添加哈希边界标记」，为旧笔记加上 `<!-- HASH_BOUNDARY -->`。
+2. 在设置页输入 Jina Key、选择 LLM 供应商并填写对应 Key & Model。
+3. 运行「处理笔记并插入建议链接」。
+4. 准备好咖啡 ☕，等待处理完成即可看到自动插入的 `[[建议链接]]`。
+
+---
+
+## Windows / macOS / Linux —— Python 环境安装指南
+
+
+### 1. 安装 Python 3.9+
+
+- Windows：<https://www.python.org/downloads/windows/>，安装时勾选「Add python.exe to PATH」。
+- macOS：建议使用 Homebrew `brew install python@3.12`。
+- Linux：发行版包管理器或官方安装包。
+
+### 2. 创建隔离虚拟环境
+
+```bash
+python -m venv .jina_linker          # 在项目根目录执行
+# Windows PowerShell
+.\.jina_linker\Scripts\Activate.ps1
+# macOS / Linux
+source .jina_linker/bin/activate
 ```
 
-### 命令
+### 3. 安装依赖
 
-- **处理笔记并插入建议链接**：扫描仓库中的笔记，生成嵌入，计算相似度，进行AI评分，并在笔记中插入建议链接
-- **批量添加哈希边界标记**：为指定路径的笔记文件批量添加 `<!-- HASH_BOUNDARY -->` 标记（新用户必备）
-- **计算笔记内容哈希值**：计算单个笔记的内容哈希值（诊断用）
-- **更新嵌入数据中的笔记哈希值**：更新指定笔记在嵌入文件中的哈希值（小幅度改动或只改变换行不影响语义，不想使用Jina API 重新嵌入数据处理）
+```bash
+pip install -r requirements.txt
+```
 
-## 设置选项
+安装完成后可执行：
 
-### 基本设置
+```bash
+python -m python_src.cli --help
+```
 
-- **Python解释器路径**：Python可执行文件的路径或命令
+若看到帮助信息则说明环境 OK。
 
-### API密钥
+---
 
-- **Jina API密钥**：用于生成文本嵌入向量
+## 目录结构速览
 
-### AI智能评分配置
+```text
+.
+├─ main.ts / main.js     # Obsidian 插件入口
+├─ services/             # 与 Obsidian 交互的业务层 (TS)
+├─ core/                 # 与平台无关的纯逻辑 (TS)
+├─ ui/                   # 设置面板 & Modal (TS)
+├─ python_src/           # Python 后端脚本（嵌入、AI 评分等）
+└─ tests/                # Python 单元测试
+```
 
-- **AI提供商选择**：支持DeepSeek、OpenAI、Claude、Gemini、自定义等多种AI提供商
-- **API配置**：为选中的AI提供商配置API URL、密钥和模型名称
-- **模型建议**：提供常用模型的快速选择按钮
-- **安全存储**：API密钥以密码形式显示，安全保存在本地配置中
+---
 
-### Python脚本处理参数
+## 常见问题（FAQ）
 
-- **排除的文件夹**：处理时要排除的文件夹名称
-- **排除的文件模式**：处理时要排除的文件名模式
-- **Jina相似度阈值**：笔记间相似度的最小阈值（0.0-1.0）
+| 问题 | 解答 |
+|------|------|
+| **如何加速 Jina Embedding 调用？** | 购买 Jina AI 付费额度或自行部署本地向量模型 |
+| **为什么没生成任何建议链接？** | 检查是否添加 `<!-- HASH_BOUNDARY -->`，以及相似度 / 分数阈值是否过高 |
+| **能否只用相似度、不用 AI 评分？** | 可以，在设置里将「AI 评分」模式设为“仅相似度阈值” |
+| **如何更新依赖？** | `npm update` / `pip install -U -r requirements.txt` |
 
-### 高级模型与内容参数
+---
 
-- **Jina模型名称**：用于生成嵌入的模型
-- **Jina嵌入最大字符数**：传递给Jina API的最大字符数
-- **AI评分内容最大长度**：传递给AI API的最大字符数
-- **每源笔记送交AI评分的最大候选链接数**：每个源笔记最多评分的候选数
+## 贡献
 
-### 链接插入与输出设置
+欢迎 Issue / PR！请遵循 **[贡献指南](CONTRIBUTING.md)**（待撰写）。
 
-- **链接插入的最小AI分数**：只有达到此分数的候选链接才会被插入到笔记中
-- **每个笔记最多插入的链接数**：每篇笔记最多插入的建议链接数量
-- **AI评分数据存储**：AI评分结果保存在 `.Jina-AI-Linker-Output/ai_scores.json` 文件中（不写入YAML frontmatter）
-- **嵌入数据存储**：嵌入向量数据保存在 `.Jina-AI-Linker-Output/jina_embeddings.json` 文件中
+---
 
-## 常见问题
+## License
 
-### 为什么我的笔记没有生成建议链接？
-
-- 检查笔记是否位于排除的文件夹内或匹配排除的文件模式
-- 笔记是否添加哈希边界标记`<!-- HASH_BOUNDARY -->`
-- 确认仓库中有足够的相关笔记可以建立链接关系
-- 尝试调低相似度阈值或AI评分阈值
-- 检查AI API密钥是否正确配置
-
-### 如何为现有笔记批量添加哈希边界标记？
-
-- 使用插件的"批量添加哈希边界标记"功能
-- 可以指定特定文件夹或文件，也可以留空处理所有笔记
-- 插件会智能检测已有标记的文件，避免重复添加
-- 标记会自动添加在笔记内容的末尾
-
-### 如何提高建议链接的质量？
-
-- 适当提高"链接插入的最小AI分数"阈值
-- 调整相似度阈值以筛选初始候选链接
-- 在笔记中提供更多上下文信息
-
-### 如何查看AI评分数据？
-
-- AI评分结果保存在 `.Jina-AI-Linker-Output/ai_scores.json` 文件中
-- 可以使用JSON查看器或文本编辑器查看详细的评分数据
-- 评分数据包含笔记间的相似度和AI评分信息，但不会写入笔记的YAML frontmatter
-
-### 插件生成的文件占用空间大吗？
-
-插件生成的嵌入文件和AI评分文件会随着仓库笔记数量的增加而增大。对于几百篇笔记的仓库，这些文件通常在几MB左右。
-
-## 重要说明
-
-### AI评分数据存储方式变更
-- **新版本**：AI评分结果仅保存在独立的JSON文件中（`.Jina-AI-Linker-Output/ai_scores.json`）
-- **不再写入**：AI评分数据不再写入笔记的YAML frontmatter，保持笔记文件的干净
-- **链接插入**：插件会从JSON文件读取AI评分数据，自动在笔记中插入符合条件的建议链接
-
-## 隐私说明
-
-- 笔记内容会通过API发送给Jina AI和您选择的AI提供商（如DeepSeek、OpenAI等）进行处理
-- 所有数据处理结果均存储在本地，不会上传到其他服务器
-- API密钥安全存储在本地配置文件中，不会被传输或共享
-- 请查阅相关AI提供商的隐私政策了解更多信息：
-  - [Jina AI隐私政策](https://jina.ai/privacy)
-  - [DeepSeek隐私政策](https://deepseek.ai/privacy)
-  - [OpenAI隐私政策](https://openai.com/privacy)
-  - [Anthropic隐私政策](https://anthropic.com/privacy)
-  - [Google AI隐私政策](https://ai.google/responsibility/responsible-ai-practices/)
-
-## 反馈与贡献
-
-有问题、建议或想要贡献代码？欢迎：
-
-- [提交Issue](https://github.com/eacheat53/Jina-AI-Linker/issues)
-- [创建Pull Request](https://github.comeacheat53/Jina-AI-Linker/pulls) 
+Apache-2.0 © 2024 eacheat53 

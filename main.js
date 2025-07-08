@@ -126,7 +126,7 @@ var DEFAULT_SCORING_PROMPT = `\u4F5C\u4E3A\u7B14\u8BB0\u5173\u8054\u6027\u8BC4\u
 
 \u8BF7\u53EA\u56DE\u590D\u4E00\u4E2A0-10\u7684\u6574\u6570\u8BC4\u5206\uFF0C\u4E0D\u8981\u6709\u4EFB\u4F55\u89E3\u91CA\u6216\u989D\u5916\u6587\u5B57\uFF01`;
 var DEFAULT_SETTINGS = {
-  pythonPath: "bin/jina-linker.exe",
+  pythonPath: "",
   jinaApiKey: "",
   aiModels: { ...DEFAULT_AI_MODELS },
   selectedAIProvider: "deepseek",
@@ -377,7 +377,7 @@ var PythonBridge = class {
     }
   }
   async runPythonScript(scanPathFromModal, scoringModeFromModal, manifestDir, vaultBasePath) {
-    log("info", "\u5F00\u59CB\u6267\u884C\uFF1A\u540E\u7AEF exe \u5904\u7406");
+    log("info", "\u5F00\u59CB\u6267\u884C\uFF1APython CLI \u5904\u7406");
     log("info", `\u626B\u63CF\u8DEF\u5F84: ${scanPathFromModal}`);
     log("info", `AI\u8BC4\u5206\u6A21\u5F0F: ${scoringModeFromModal}`);
     try {
@@ -385,11 +385,12 @@ var PythonBridge = class {
       return new Promise(async (resolve) => {
         var _a;
         if (!manifestDir) {
-          const error = createProcessingError("FILE_NOT_FOUND", "\u65E0\u6CD5\u786E\u5B9A\u63D2\u4EF6\u76EE\u5F55\u4EE5\u5B9A\u4F4D jina-linker.exe");
+          const error = createProcessingError("FILE_NOT_FOUND", "\u65E0\u6CD5\u786E\u5B9A\u63D2\u4EF6\u76EE\u5F55\u4EE5\u5B9A\u4F4D cli.py");
           resolve({ success: false, error });
           return;
         }
-        const exePath = path.join(vaultBasePath, manifestDir, "bin", "jina-linker.exe");
+        const pythonExe = this.settings.pythonPath || "python";
+        const scriptPath = path.join(vaultBasePath, manifestDir, "python_src", "cli.py");
         const outputDirInVault = DEFAULT_OUTPUT_DIR_IN_VAULT;
         const fullOutputDirPath = path.join(vaultBasePath, outputDirInVault);
         try {
@@ -458,8 +459,8 @@ var PythonBridge = class {
           args = args.concat(patterns);
         }
         this.notificationService.showNotice("\u{1F680} JinaLinker: \u5F00\u59CB\u6267\u884C\u540E\u7AEF\u7A0B\u5E8F...", 5e3);
-        log("info", `\u6267\u884C\u540E\u7AEF\u7A0B\u5E8F: ${exePath} ${this.sanitizeArgsForLog(args).join(" ")}`);
-        const pythonProcess = (0, import_child_process.spawn)(exePath, args, {
+        log("info", `\u6267\u884C\u540E\u7AEF\u7A0B\u5E8F: ${pythonExe} ${[scriptPath, ...this.sanitizeArgsForLog(args)].join(" ")}`);
+        const pythonProcess = (0, import_child_process.spawn)(pythonExe, [scriptPath, ...args], {
           stdio: ["pipe", "pipe", "pipe"],
           signal: (_a = this.currentOperation) == null ? void 0 : _a.signal
         });
@@ -1116,6 +1117,12 @@ var JinaLinkerSettingTab = class extends import_obsidian7.PluginSettingTab {
       text.inputEl.type = "password";
       text.setPlaceholder("\u8F93\u5165 Jina API \u5BC6\u94A5").setValue(this.plugin.settings.jinaApiKey).onChange(async (value) => {
         this.plugin.settings.jinaApiKey = value;
+        await this.plugin.saveSettings();
+      });
+    });
+    new import_obsidian7.Setting(containerEl).setClass("jina-settings-block").setName("Python \u53EF\u6267\u884C\u8DEF\u5F84").setDesc("\u5982\u7559\u7A7A\u5219\u4F7F\u7528\u7CFB\u7EDF PATH \u4E2D\u7684 python\u3002\u53EF\u4EE5\u586B\u5199\u865A\u62DF\u73AF\u5883\u4E0B\u7684\u5B8C\u6574 python.exe \u8DEF\u5F84\u3002").addText((text) => {
+      text.setPlaceholder("\u4F8B\u5982 C:/Python311/python.exe").setValue(this.plugin.settings.pythonPath || "").onChange(async (value) => {
+        this.plugin.settings.pythonPath = value.trim();
         await this.plugin.saveSettings();
       });
     });

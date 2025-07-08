@@ -1,2 +1,4 @@
-requests>=2.31
+numpy>=1.23
 PyYAML>=6.0
+requests>=2.31
+pytest>=7.4 

@@ -28,7 +28,7 @@ export class PythonBridge {
         manifestDir: string, 
         vaultBasePath: string
     ): Promise<OperationResult<boolean>> {
-        log('info', '开始执行：后端 exe 处理');
+        log('info', '开始执行：Python CLI 处理');
         log('info', `扫描路径: ${scanPathFromModal}`);
         log('info', `AI评分模式: ${scoringModeFromModal}`);
         
@@ -36,13 +36,14 @@ export class PythonBridge {
             this.currentOperation = new AbortController();
             
             return new Promise(async (resolve) => {
-                // 解析 exe 路径：Vault 根 + 插件目录 + bin/jina-linker.exe
+                // 解析 Python 解释器与脚本路径
                 if (!manifestDir) {
-                    const error = createProcessingError('FILE_NOT_FOUND', '无法确定插件目录以定位 jina-linker.exe');
+                    const error = createProcessingError('FILE_NOT_FOUND', '无法确定插件目录以定位 cli.py');
                     resolve({ success: false, error });
                     return;
                 }
-                const exePath = path.join(vaultBasePath, manifestDir, 'bin', 'jina-linker.exe');
+                const pythonExe = this.settings.pythonPath || 'python';
+                const scriptPath = path.join(vaultBasePath, manifestDir, 'python_src', 'cli.py');
 
                 // 使用默认输出目录
                 const outputDirInVault = DEFAULT_OUTPUT_DIR_IN_VAULT;
@@ -115,8 +116,8 @@ export class PythonBridge {
                 
                 this.notificationService.showNotice('🚀 JinaLinker: 开始执行后端程序...', 5000);
                 
-                log('info', `执行后端程序: ${exePath} ${this.sanitizeArgsForLog(args).join(' ')}`);
-                const pythonProcess = spawn(exePath, args, {
+                log('info', `执行后端程序: ${pythonExe} ${[scriptPath, ...this.sanitizeArgsForLog(args)].join(' ')}`);
+                const pythonProcess = spawn(pythonExe, [scriptPath, ...args], {
                     stdio: ['pipe', 'pipe', 'pipe'],
                     signal: this.currentOperation?.signal
                 });

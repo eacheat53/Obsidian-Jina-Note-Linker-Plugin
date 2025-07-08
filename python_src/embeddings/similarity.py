@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import math
 from typing import Dict, List
+import numpy as np
 
 from python_src.utils.logger import get_logger
 
@@ -26,47 +27,42 @@ def cosine_similarity(vec1: List[float] | None, vec2: List[float] | None) -> flo
 # ----------------------- 根据相似度生成候选对 -----------------------
 
 def generate_candidate_pairs(embeddings_data_input: Dict, similarity_threshold: float) -> List[Dict]:
-    """基于向量相似度生成候选链接对 (降序)。"""
-    logger.info("开始生成候选链接对 …")
-    files_data = embeddings_data_input.get("files", {})
+    """使用 NumPy 批量计算余弦相似度，生成候选链接对。"""
+    logger.info("[相似度] 开始生成候选链接对 …")
 
-    valid_paths = [p for p, info in files_data.items() if info.get("embedding")]
-    total = len(valid_paths) * (len(valid_paths) - 1) // 2
-    if not total:
+    files_data = embeddings_data_input.get("files", {})
+    items = [(p, info) for p, info in files_data.items() if info.get("embedding")]
+    if len(items) < 2:
         return []
 
-    logger.info("共有 %s 个文件待比较，总计 %s 次比较。", len(valid_paths), total)
+    paths = [p for p, _ in items]
+    vectors = np.array([info["embedding"] for _, info in items], dtype=np.float32)
 
+    # 向量归一化
+    norms = np.linalg.norm(vectors, axis=1, keepdims=True)
+    norms[norms == 0] = 1.0
+    vectors /= norms
+
+    sim_matrix = vectors @ vectors.T  # (n, n)
+    n = len(paths)
     candidates: List[Dict] = []
-    completed = 0
-    progress_step = max(1, total // 20)
-    next_mark = progress_step
 
-    for i, p1 in enumerate(valid_paths):
-        emb1 = files_data[p1]["embedding"]
-        hash1 = files_data[p1].get("hash")
-        for j, p2 in enumerate(valid_paths[i + 1 :], start=i + 1):
-            emb2 = files_data[p2]["embedding"]
-            hash2 = files_data[p2].get("hash")
-            completed += 1
-            if completed >= next_mark:
-                logger.info("进度 %.1f%% - 正在比较 %s <-> %s", completed / total * 100, p1, p2)
-                next_mark += progress_step
-
-            sim = cosine_similarity(emb1, emb2)
+    for i in range(n):
+        for j in range(i + 1, n):
+            sim = float(sim_matrix[i, j])
             if sim >= similarity_threshold:
                 candidates.append(
                     {
-                        "source_path": p1,
-                        "target_path": p2,
+                        "source_path": paths[i],
+                        "target_path": paths[j],
                         "jina_similarity": sim,
-                        "source_hash": hash1,
-                        "target_hash": hash2,
+                        "source_hash": files_data[paths[i]].get("hash"),
+                        "target_hash": files_data[paths[j]].get("hash"),
                     }
                 )
 
     candidates.sort(key=lambda x: x["jina_similarity"], reverse=True)
-    logger.info("候选链接对生成完成，共 %s 条。", len(candidates))
+    logger.info("[相似度] 生成完成，共 %s 条候选对。", len(candidates))
     return candidates
 
 

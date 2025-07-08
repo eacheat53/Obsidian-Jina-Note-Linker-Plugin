@@ -75,6 +75,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--max_candidates_per_source_for_ai_scoring", type=int, default=20,
                    help="每个源文件最多发送给 AI 评分的候选数量")
 
+    # 新增日志级别参数
+    p.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+                   help="日志级别，默认为 INFO")
+
     p.add_argument("--export_json", action="store_true", help="导出AI评分数据到JSON")
     p.add_argument("--export_json_only", action="store_true", help="仅导出AI评分数据到JSON，不执行其他处理")
     p.add_argument("--no_export_json", action="store_true", help="不导出AI评分数据到JSON")
@@ -87,6 +91,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def main() -> None:  # pragma: no cover
     parser = build_arg_parser()
     args = parser.parse_args()
+
+    # 根据 --log-level 重新初始化 logger（覆盖默认 INFO）
+    init_logger(args.log_level.upper())
 
     start_time = time.time()
 

@@ -1,7 +1,9 @@
 # 编译
 build/
 dist/
-jina-linker.spec
+*.spec
+# Python build artifacts
+*.egg-info/
 # Python缓存
 __pycache__/
 *.py[cod]

@@ -74,7 +74,7 @@ export const DEFAULT_SCORING_PROMPT = `作为笔记关联性评分专家，请�
 请只回复一个0-10的整数评分，不要有任何解释或额外文字！`;
 
 export const DEFAULT_SETTINGS: JinaLinkerSettings = {
-    pythonPath: 'bin/jina-linker.exe',
+    pythonPath: '',
     jinaApiKey: '',
     aiModels: { ...DEFAULT_AI_MODELS },
     selectedAIProvider: 'deepseek',

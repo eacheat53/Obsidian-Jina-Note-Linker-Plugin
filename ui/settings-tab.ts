@@ -36,6 +36,19 @@ export class JinaLinkerSettingTab extends PluginSettingTab {
                     });
             });
 
+        new Setting(containerEl)
+            .setClass('jina-settings-block')
+            .setName('Python 可执行路径')
+            .setDesc('如留空则使用系统 PATH 中的 python。可以填写虚拟环境下的完整 python.exe 路径。')
+            .addText(text => {
+                text.setPlaceholder('例如 C:/Python311/python.exe')
+                    .setValue(this.plugin.settings.pythonPath || '')
+                    .onChange(async (value) => {
+                        this.plugin.settings.pythonPath = value.trim();
+                        await this.plugin.saveSettings();
+                    });
+            });
+
         // AI 模型配置部分
         containerEl.createEl('div', { cls: 'jina-settings-section', text: '' }).innerHTML = '<div class="jina-settings-section-title">AI 智能评分配置</div>';
 
