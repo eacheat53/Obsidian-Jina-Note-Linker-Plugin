@@ -22,6 +22,7 @@ AI_SCORING_MAX_TOTAL_CHARS: int = 23000  # 批量处理总字符数限制，可�
 DEFAULT_EMBEDDINGS_FILE_NAME: str = "jina_embeddings.db"
 DEFAULT_AI_SCORES_FILE_NAME: str = "ai_scores.db"
 DEFAULT_SIMILARITY_THRESHOLD: float = 0.70
+DEFAULT_MAIN_DB_FILE_NAME: str = "jina_data.db"
 
 # ------------------------- Provider endpoint map --------------------------
 DEFAULT_AI_CONFIGS: dict[str, dict[str, str]] = {

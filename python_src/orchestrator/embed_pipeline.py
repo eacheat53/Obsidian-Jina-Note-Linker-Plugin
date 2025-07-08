@@ -13,6 +13,8 @@ from python_src.hash_utils.hasher import (
     extract_content_for_hashing,
 )
 from python_src.io.note_loader import read_markdown_with_frontmatter
+from python_src.io.output_writer import write_markdown_with_frontmatter
+import uuid
 from python_src.utils.db import get_db_connection
 from python_src.utils.logger import get_logger
 
@@ -32,15 +34,16 @@ def process_and_embed_notes(
     conn = get_db_connection(embeddings_db_path)
     cur = conn.cursor()
 
-    # 从数据库加载现有数据
+    # 从数据库预先加载 notes 表数据，构建映射: file_name -> {...}
     files_data_from_db: Dict[str, Dict] = {}
     cur.execute(
-        "SELECT file_path, content_hash, embedding FROM file_embeddings"
+        "SELECT file_name, content_hash, embedding, note_id FROM notes"
     )
-    for fp, h, emb_blob in cur.fetchall():
+    for fp, h, emb_blob, nid in cur.fetchall():
         files_data_from_db[fp] = {
             "hash": h,
             "embedding": json.loads(emb_blob) if emb_blob else None,
+            "note_id": nid,
         }
 
     embedded_count = 0
@@ -61,12 +64,27 @@ def process_and_embed_notes(
             abs_path = os.path.join(project_root_abs, rel_path)
             if not os.path.exists(abs_path):
                 logger.warning("文件不存在，已跳过并从 DB 删除: %s", rel_path)
-                cur.execute("DELETE FROM file_embeddings WHERE file_path = ?", (rel_path,))
+                # 删除 notes 记录和相关 scores 记录
+                cur.execute("SELECT note_id FROM notes WHERE file_name = ?", (rel_path,))
+                row = cur.fetchone()
+                if row:
+                    nid_to_remove = row[0]
+                    cur.execute("DELETE FROM notes WHERE note_id = ?", (nid_to_remove,))
+                    cur.execute("DELETE FROM scores WHERE note_id_a = ? OR note_id_b = ?", (nid_to_remove, nid_to_remove))
                 all_files_data_for_return.pop(rel_path, None)
                 continue
 
             # 读取内容 - read_markdown_with_frontmatter 已经过滤了边界标记之后的内容
             body, fm, _ = read_markdown_with_frontmatter(abs_path)
+
+            # 处理 note_id
+            note_id = fm.get("note_id") or fm.get("jina_id")
+            if not note_id:
+                note_id = str(uuid.uuid4())
+                fm["note_id"] = note_id
+                # 将新的 note_id 写回文件
+                write_markdown_with_frontmatter(abs_path, fm, body)
+
             
             # 为了哈希计算，我们还是需要使用 extract_content_for_hashing
             content_to_hash = extract_content_for_hashing(body)
@@ -97,6 +115,7 @@ def process_and_embed_notes(
                 {
                     "file_path": rel_path,
                     "content_hash": content_hash,
+                    "note_id": note_id,
                 }
             )
 
@@ -110,15 +129,18 @@ def process_and_embed_notes(
         )
         for info, emb in zip(batch_file_info, embeddings):
             rel_path = info["file_path"]
+            note_id_val = info["note_id"]
             cur.execute(
                 """
-                INSERT INTO file_embeddings (file_path, content_hash, embedding)
-                VALUES (?, ?, ?)
-                ON CONFLICT(file_path) DO UPDATE SET
+                INSERT INTO notes (note_id, file_name, content_hash, embedding)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(note_id) DO UPDATE SET
+                    file_name = excluded.file_name,
                     content_hash = excluded.content_hash,
                     embedding    = excluded.embedding
                 """,
                 (
+                    note_id_val,
                     rel_path,
                     info["content_hash"],
                     json.dumps(emb) if emb else None,
@@ -127,6 +149,7 @@ def process_and_embed_notes(
             all_files_data_for_return[rel_path] = {
                 "hash": info["content_hash"],
                 "embedding": emb,
+                "note_id": note_id_val,
             }
             if emb:
                 embedded_count += 1

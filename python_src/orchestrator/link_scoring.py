@@ -17,8 +17,7 @@ logger = get_logger(__name__)
 def score_candidates(
     candidate_pairs: List[Dict],
     project_root_abs: str,
-    embeddings_db_path: str,
-    ai_scores_db_path: str,
+    main_db_path: str,
     ai_provider: str,
     ai_api_url: str,
     ai_api_key: str,
@@ -59,7 +58,7 @@ def score_candidates(
         logger.info("没有候选链接对需要评分。")
         return
 
-    conn = get_db_connection(ai_scores_db_path)
+    conn = get_db_connection(main_db_path)
     cur = conn.cursor()
 
     # 过滤出有效的候选对
@@ -84,20 +83,16 @@ def score_candidates(
         # 查询所有已评分的路径对及哈希
         cur.execute(
             """
-            SELECT source_path, target_path, source_hash, target_hash
-            FROM ai_relationships
+            SELECT file_name_a, file_name_b
+            FROM scores
             """
         )
         existing_pairs_raw = cur.fetchall()
-        existing_pairs: set[tuple[str, str, str, str]] = {
-            (s, t, sh or "", th or "") for s, t, sh, th in existing_pairs_raw
-        }
-        # 双向加入
-        existing_pairs |= {(t, s, th or "", sh or "") for s, t, sh, th in existing_pairs_raw}
+        existing_pairs: set[tuple[str, str]] = {(s, t) for s, t in existing_pairs_raw} | {(t, s) for s, t in existing_pairs_raw}
 
         before_count = len(valid_pairs)
         def need_score(p):
-            return (p["source_path"], p["target_path"], p.get("source_hash", ""), p.get("target_hash", "")) not in existing_pairs
+            return (p["source_path"], p["target_path"]) not in existing_pairs
 
         valid_pairs = [p for p in valid_pairs if need_score(p)]
         skipped = before_count - len(valid_pairs)
@@ -171,39 +166,37 @@ def score_candidates(
                 data,
                 max_retries=3,
                 save_responses=save_api_responses,
-                ai_scores_db_path=ai_scores_db_path,
+                ai_scores_db_path=main_db_path,
                 prompt_type=prompt_type,
             )
         except Exception as e:
             logger.error("AI评分请求失败: %s", e)
             continue
 
-        # 建立 (src_path, tgt_path) -> (src_hash, tgt_hash) 映射
-        p_hash_map = {
-            (pp["source_path"], pp["target_path"]): (pp.get("source_hash", ""), pp.get("target_hash", ""))
-            for pp in prompt_pairs
-        }
-
-        # 将结果写入 DB
+        # note_id 需要查找或从 candidate_pairs 结构获取，假设 candidate_pairs 中包含 note_id_*.
         rel_insert_rows = []
         for r in results:
             src_path = r["source_path"]
             tgt_path = r["target_path"]
-            sh, th = p_hash_map.get((src_path, tgt_path), ("", ""))
+
+            # 从 prompt_pairs 找 note_id
+            src_nid = next((pp.get("source_note_id") for pp in prompt_pairs if pp["source_path"] == src_path), "")
+            tgt_nid = next((pp.get("target_note_id") for pp in prompt_pairs if pp["target_path"] == tgt_path), "")
+
             rel_insert_rows.append(
                 (
+                    src_nid,
                     src_path,
+                    tgt_nid,
                     tgt_path,
-                    sh,
-                    th,
                     r.get("ai_score"),
                 )
             )
         cur.executemany(
             """
-            INSERT INTO ai_relationships (source_path, target_path, source_hash, target_hash, ai_score)
+            INSERT INTO scores (note_id_a, file_name_a, note_id_b, file_name_b, ai_score)
             VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(source_path, target_path, source_hash, target_hash) DO UPDATE SET
+            ON CONFLICT(note_id_a, note_id_b) DO UPDATE SET
                 ai_score = excluded.ai_score
             """,
             rel_insert_rows,

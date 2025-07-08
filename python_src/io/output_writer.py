@@ -11,8 +11,7 @@ import yaml
 
 from python_src.utils.logger import get_logger
 from python_src.config import (
-    DEFAULT_EMBEDDINGS_FILE_NAME,
-    DEFAULT_AI_SCORES_FILE_NAME,
+    DEFAULT_MAIN_DB_FILE_NAME,
 )
 
 # sqlite_to_json 位于迁移模块，避免循环导入时局部导入
@@ -94,6 +93,7 @@ def export_ai_scores_to_json(
     project_root_abs: str,
     output_dir_abs: str,
     export_dir_name: str = ".jina-linker",
+    min_score: int = 7,
 ) -> None:
     """导出 AI 评分数据为 JSON（新格式：ai_scores_by_source）。"""
     logger.info("[导出] 正在导出 AI 评分数据到 JSON...")
@@ -101,7 +101,7 @@ def export_ai_scores_to_json(
     json_dir = Path(project_root_abs) / export_dir_name
     json_dir.mkdir(parents=True, exist_ok=True)
 
-    ai_scores_db = Path(output_dir_abs) / DEFAULT_AI_SCORES_FILE_NAME
+    ai_scores_db = Path(output_dir_abs) / DEFAULT_MAIN_DB_FILE_NAME
     ai_scores_json = json_dir / "ai_scores.json"
     if not ai_scores_db.exists():
         logger.warning("AI scores DB 不存在: %s", ai_scores_db)
@@ -110,10 +110,9 @@ def export_ai_scores_to_json(
     # 读取并分组
     conn = sqlite3.connect(ai_scores_db)
     cur = conn.cursor()
-    min_score = 7
     source_map: Dict[str, list] = {}
     for src, tgt, score in cur.execute(
-        "SELECT source_path, target_path, ai_score FROM ai_relationships WHERE ai_score >= ?",
+        "SELECT file_name_a, file_name_b, ai_score FROM scores WHERE ai_score >= ?",
         (min_score,),
     ):
         source_map.setdefault(src, []).append([tgt, score])

@@ -18,23 +18,22 @@ sys.path.insert(0, parent_dir)
 
 # 在设置路径后导入项目模块
 from python_src.config import (
-    DEFAULT_AI_SCORES_FILE_NAME,
-    DEFAULT_EMBEDDINGS_FILE_NAME,
+    DEFAULT_MAIN_DB_FILE_NAME,
     DEFAULT_SIMILARITY_THRESHOLD,
     AI_SCORING_BATCH_SIZE,
     AI_SCORING_MAX_CHARS_PER_NOTE,
     AI_SCORING_MAX_TOTAL_CHARS,
 )
-from python_src.db.schema import EMBEDDINGS_DB_SCHEMA, AI_SCORES_DB_SCHEMA
+from python_src.db.schema import MAIN_DB_SCHEMA
 from python_src.embeddings.similarity import generate_candidate_pairs
 from python_src.io.note_loader import list_markdown_files
 from python_src.io.output_writer import export_ai_scores_to_json
 from python_src.orchestrator.embed_pipeline import process_and_embed_notes
 from python_src.orchestrator.link_scoring import score_candidates
-from python_src.utils.db import initialize_database, check_table_exists, list_database_tables, get_db_connection
+from python_src.utils.db import initialize_database, list_database_tables, get_db_connection
 from python_src.utils.logger import init_logger, get_logger
 from python_src.hash_utils.hasher import HASH_BOUNDARY_MARKER
-from python_src.migration.migrate_sqlite import upgrade_ai_scores_schema
+# 不再需要旧版 SQLite 迁移逻辑, 已移除
 
 init_logger()
 logger = get_logger(__name__)
@@ -85,6 +84,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--save_api_responses", action="store_true", default=True,
                    help="是否保存API请求和响应到数据库中")
     p.add_argument("--test_ai_responses_db", action="store_true", help="测试ai_responses表是否可正常使用")
+
+    # 为兼容旧前端，保留 --min_ai_score 参数（仅用于导出 JSON 时过滤阈值）
+    p.add_argument("--min_ai_score", type=int, default=7,
+                   help="导出 JSON 时保留的最低 AI 分数阈值")
     return p
 
 
@@ -102,53 +105,21 @@ def main() -> None:  # pragma: no cover
     os.makedirs(output_dir_abs, exist_ok=True)
 
     if args.export_json_only:
-        export_ai_scores_to_json(project_root_abs, output_dir_abs)
+        export_ai_scores_to_json(project_root_abs, output_dir_abs, min_score=args.min_ai_score)
         return
 
-    embeddings_db_path = os.path.join(output_dir_abs, DEFAULT_EMBEDDINGS_FILE_NAME)
-    ai_scores_db_path = os.path.join(output_dir_abs, DEFAULT_AI_SCORES_FILE_NAME)
+    main_db_path = os.path.join(output_dir_abs, DEFAULT_MAIN_DB_FILE_NAME)
 
-    initialize_database(embeddings_db_path, EMBEDDINGS_DB_SCHEMA)
-    initialize_database(ai_scores_db_path, AI_SCORES_DB_SCHEMA)
-    
-    # 升级数据库结构（增加新的ai_responses表）
-    upgrade_ai_scores_schema(ai_scores_db_path)
-    
-    # 验证ai_responses表是否存在
-    logger.info("验证数据库表结构...")
-    has_table = check_table_exists(ai_scores_db_path, "ai_responses")
-    if not has_table:
-        logger.warning("ai_responses表不存在，将尝试重新创建")
-        # 强制重新创建表
-        conn = get_db_connection(ai_scores_db_path)
-        try:
-            conn.execute("""
-            CREATE TABLE IF NOT EXISTS ai_responses (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                batch_id TEXT NOT NULL,
-                ai_provider TEXT NOT NULL,
-                model_name TEXT NOT NULL,
-                request_content TEXT,
-                response_content TEXT,
-                prompt_type TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-            """)
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_ai_responses_batch ON ai_responses(batch_id)")
-            conn.commit()
-            logger.info("已手动创建ai_responses表")
-        except Exception as e:
-            logger.error(f"手动创建表失败: {e}")
-        finally:
-            conn.close()
-    
-    # 列出所有表以确认
-    list_database_tables(ai_scores_db_path)
+    # 若数据库不存在则初始化结构
+    initialize_database(main_db_path, MAIN_DB_SCHEMA)
+
+    # 列出所有表以确认结构
+    list_database_tables(main_db_path)
     
     # 测试ai_responses表
     if args.test_ai_responses_db:
         logger.info("测试ai_responses表...")
-        conn = get_db_connection(ai_scores_db_path)
+        conn = get_db_connection(main_db_path)
         try:
             # 插入测试数据
             test_batch_id = f"test_{int(time.time())}"
@@ -213,7 +184,7 @@ def main() -> None:  # pragma: no cover
     embeddings_data = process_and_embed_notes(
         project_root_abs,
         markdown_files,
-        embeddings_db_path,
+        main_db_path,
         jina_api_key_to_use=args.jina_api_key,
         jina_model_name_to_use=args.jina_model_name,
         max_chars_for_jina_to_use=args.max_chars_for_jina,
@@ -231,8 +202,7 @@ def main() -> None:  # pragma: no cover
         score_candidates(
             candidates,
             project_root_abs,
-            embeddings_db_path,
-            ai_scores_db_path,
+            main_db_path,
             ai_provider=args.ai_provider,
             ai_api_url=args.ai_api_url,
             ai_api_key=args.ai_api_key,
@@ -249,7 +219,7 @@ def main() -> None:  # pragma: no cover
         )
 
     if not args.no_export_json or args.export_json:
-        export_ai_scores_to_json(project_root_abs, output_dir_abs)
+        export_ai_scores_to_json(project_root_abs, output_dir_abs, min_score=args.min_ai_score)
 
     logger.info("流程完成，总耗时 %.2fs", time.time() - start_time)
 

@@ -58,6 +58,8 @@ def generate_candidate_pairs(embeddings_data_input: Dict, similarity_threshold: 
                         "jina_similarity": sim,
                         "source_hash": files_data[paths[i]].get("hash"),
                         "target_hash": files_data[paths[j]].get("hash"),
+                        "source_note_id": files_data[paths[i]].get("note_id"),
+                        "target_note_id": files_data[paths[j]].get("note_id"),
                     }
                 )
 
