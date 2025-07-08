@@ -9,8 +9,6 @@ import { FileProcessor } from './services/file-processor';
 import { JinaLinkerSettingTab } from './ui/settings-tab';
 import { RunPluginModal } from './ui/modals/run-plugin-modal';
 import { ProgressModal } from './ui/modals/progress-modal';
-import { CalculateHashModal } from './ui/modals/calculate-hash-modal';
-import { UpdateHashesModal } from './ui/modals/update-hashes-modal';
 import { AddHashBoundaryModal } from './ui/modals/add-hash-boundary-modal';
 import { log } from './utils/error-handler';
 import { DEFAULT_AI_MODELS } from './models/constants';
@@ -75,32 +73,7 @@ export default class JinaLinkerPlugin extends Plugin {
             }
         });
 
-        this.addCommand({
-            id: 'calculate-note-content-hash',
-            name: '计算笔记内容哈希值 (诊断用)',
-            callback: () => {
-                console.log('🔢 用户启动：计算笔记内容哈希值功能');
-                new CalculateHashModal(this.app, this, async (filePath) => {
-                    this.calculateHashForFile(filePath);
-                }).open();
-            }
-        });
-
-        this.addCommand({
-            id: 'update-hashes-in-embeddings-file',
-            name: '更新嵌入数据中的笔记哈希值',
-            callback: () => {
-                console.log('🔄 用户启动：更新嵌入数据中的笔记哈希值功能');
-                new UpdateHashesModal(this.app, this, async (filePathsStr) => {
-                    const relativePaths = filePathsStr.split(',').map(p => p.trim()).filter(p => p);
-                    if (relativePaths.length === 0) {
-                        new Notice('未提供有效的文件路径。');
-                return;
-            }
-                    await this.fileProcessor.updateHashesInEmbeddingsFile(relativePaths);
-                }).open();
-            }
-        });
+        // 已移除“更新嵌入数据中的笔记哈希值”命令（数据库架构自动处理哈希同步）
 
         this.addCommand({
             id: 'add-hash-boundary-markers',
@@ -144,30 +117,7 @@ export default class JinaLinkerPlugin extends Plugin {
                    });
             });
             
-            menu.addItem((item: any) => {
-                item.setTitle("计算笔记内容哈希值 (诊断用)")
-                   .setIcon("hash")
-                   .onClick(() => {
-                        new CalculateHashModal(this.app, this, async (filePath) => {
-                            this.calculateHashForFile(filePath);
-                        }).open();
-                   });
-            });
-            
-            menu.addItem((item: any) => {
-                item.setTitle("更新嵌入数据中的笔记哈希值")
-                   .setIcon("refresh-cw")
-                   .onClick(() => {
-                        new UpdateHashesModal(this.app, this, async (filePathsStr) => {
-                            const relativePaths = filePathsStr.split(',').map(p => p.trim()).filter(p => p);
-                            if (relativePaths.length === 0) {
-                                new Notice('未提供有效的文件路径。');
-                                return;
-                            }
-                            await this.fileProcessor.updateHashesInEmbeddingsFile(relativePaths);
-                        }).open();
-                   });
-            });
+            // 移除更新哈希菜单项
 
             menu.addItem((item: any) => {
                 item.setTitle("批量添加哈希边界标记")

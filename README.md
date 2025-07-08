@@ -2,9 +2,7 @@
 
 > 为 **Obsidian** 打造的 AI 级链接推荐助手，基于 **Jina Embeddings** 与多家 LLM 服务，为你的笔记自动建立知识网络。
 
-![Jina AI Linker 预览](images/1.png)
-![Jina AI Linker 预览](images/2.png)
-![Jina AI Linker 预览](images/3.png)
+![Jina AI Linker 预览](images/4.png)
 
 ---
 
@@ -17,8 +15,7 @@
 | AI 智能评分 | • 支持 **OpenAI / DeepSeek / Claude / Gemini / 任意 OpenAI-兼容 API**\
 | 建议链接插入 | • 基于阈值自动写回 Markdown\
 | 内容追踪 | • `<!-- HASH_BOUNDARY -->` 哈希边界避免重复处理 |
-| 多端存储 | • 嵌入 / AI 评分结果独立 JSON 文件，笔记保持纯净 |
-| 可扩展 | • Python 与 TypeScript 解耦，易于二次开发 |
+| 多端存储 | • 嵌入 / AI 评分结果独立 SQL，笔记保持纯净 |
 
 ---
 
@@ -99,19 +96,10 @@ python -m python_src.cli --help
 
 | 问题 | 解答 |
 |------|------|
-| **如何加速 Jina Embedding 调用？** | 购买 Jina AI 付费额度或自行部署本地向量模型 |
 | **为什么没生成任何建议链接？** | 检查是否添加 `<!-- HASH_BOUNDARY -->`，以及相似度 / 分数阈值是否过高 |
-| **能否只用相似度、不用 AI 评分？** | 可以，在设置里将「AI 评分」模式设为“仅相似度阈值” |
-| **如何更新依赖？** | `npm update` / `pip install -U -r requirements.txt` |
 
 ---
 
 ## 贡献
 
 欢迎 Issue / PR！请遵循 **[贡献指南](CONTRIBUTING.md)**（待撰写）。
-
----
-
-## License
-
-Apache-2.0 © 2024 eacheat53 

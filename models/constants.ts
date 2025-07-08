@@ -12,7 +12,7 @@ export const LINKS_END_MARKER = '<!-- LINKS_END -->';
 
 // 默认输出目录和嵌入文件名称
 export const DEFAULT_OUTPUT_DIR_IN_VAULT = '.jina-linker';
-export const EMBEDDINGS_FILE_NAME = 'embeddings.json';
+export const EMBEDDINGS_FILE_NAME = 'jina_embeddings.db';
 
 // 默认AI模型配置
 export const DEFAULT_AI_MODELS: Record<AIProvider, AIModelConfig> = {

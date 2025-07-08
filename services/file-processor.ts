@@ -1,11 +1,9 @@
 import { Notice, TFile, TFolder, normalizePath } from 'obsidian';
-import * as path from 'path';
-import * as crypto from 'crypto';
-import { DEFAULT_OUTPUT_DIR_IN_VAULT, EMBEDDINGS_FILE_NAME, HASH_BOUNDARY_MARKER } from '../models/constants';
+import { HASH_BOUNDARY_MARKER } from '../models/constants';
 import { OperationResult } from '../models/interfaces';
-import { createProcessingError, log } from '../utils/error-handler';
+import { log } from '../utils/error-handler';
 import { CacheManager } from '../utils/cache-manager';
-import { HashManager } from './ash-manager';
+// HashManager 仅在旧的哈希更新功能中使用，已移除
 
 export class FileProcessor {
     constructor(private app: any, private cacheManager: CacheManager) {}
@@ -18,97 +16,7 @@ export class FileProcessor {
         ) as TFile[];
     }
 
-    // 更新嵌入JSON和文件frontmatter中的哈希值
-    async updateHashesInEmbeddingsFile(targetRelativePaths: string[]): Promise<void> {
-        new Notice(`开始处理 ${targetRelativePaths.length} 个路径，更新哈希值...`);
-        const outputDirInVault = DEFAULT_OUTPUT_DIR_IN_VAULT;
-        const embeddingsFilePath = normalizePath(path.join(outputDirInVault, EMBEDDINGS_FILE_NAME));
-        let embeddingsData: any;
-        try {
-            if (!(await this.app.vault.adapter.exists(embeddingsFilePath))) {
-                new Notice(`错误: 嵌入文件 "${embeddingsFilePath}" 未找到。`);
-                return;
-            }
-            const rawData = await this.app.vault.adapter.read(embeddingsFilePath);
-            embeddingsData = JSON.parse(rawData);
-            if (!embeddingsData.files || typeof embeddingsData.files !== 'object') {
-                throw new Error("嵌入文件结构不正确，缺少 'files' 对象。");
-            }
-        } catch (error: any) {
-            new Notice(`读取或解析嵌入文件 "${embeddingsFilePath}" 失败: ${error.message}`);
-            return;
-        }
-        
-        const hashManager = new HashManager(this.app, this.cacheManager);
-        let updatedJsonCount = 0, updatedFrontmatterCount = 0, notFoundCount = 0, hashFailCount = 0, noChangeCount = 0;
-
-        // 收集要处理的文件
-        let files: TFile[] = [];
-        for (const rel of targetRelativePaths) {
-            const norm = normalizePath(rel);
-            const af = this.app.vault.getAbstractFileByPath(norm);
-            if (af instanceof TFolder) {
-                files.push(...this.getMarkdownFilesInFolder(af));
-            } else if (af instanceof TFile && af.extension === 'md') {
-                files.push(af);
-            }
-        }
-        files = Array.from(new Set(files));
-
-        for (const tFile of files) {
-            const relPath = tFile.path;
-            const newHash = await hashManager.calculateNoteContentHashForFile(tFile);
-            if (!newHash) { hashFailCount++; continue; }
-
-            if (embeddingsData.files.hasOwnProperty(relPath)) {
-                if (embeddingsData.files[relPath].hash !== newHash) {
-                    embeddingsData.files[relPath].hash = newHash;
-                    embeddingsData.files[relPath].last_hash_updated_at = new Date().toISOString();
-                    updatedJsonCount++;
-                }
-            } else {
-                notFoundCount++;
-            }
-            
-            try {
-                const content = await this.cacheManager.getCachedFileContent(tFile, this.app.vault);
-                const fmRegex = /^---\s*\n([\s\S]*?)\n---\s*\n/;
-                const fmMatch = content.match(fmRegex);
-                let newContent: string;
-                if (fmMatch) {
-                    const fmBody = fmMatch[1];
-                    const jinaRegex = /^jina_hash:\s*.*$/m;
-                    if (jinaRegex.test(fmBody)) {
-                        newContent = content.replace(jinaRegex, `jina_hash: ${newHash}`);
-                    } else {
-                        const replaced = `${fmBody}\njina_hash: ${newHash}`;
-                        newContent = content.replace(fmRegex, `---\n${replaced}\n---\n`);
-                    }
-                } else {
-                    newContent = `---\njina_hash: ${newHash}\n---\n\n${content}`;
-                }
-                if (newContent !== content) {
-                    await this.app.vault.modify(tFile, newContent);
-                    updatedFrontmatterCount++;
-                } else {
-                    noChangeCount++;
-                }
-            } catch (error: any) {
-                log('error', `更新前置属性失败 ${relPath}`, error);
-            }
-        }
-
-        if (updatedJsonCount > 0) {
-            try {
-                await this.app.vault.adapter.write(embeddingsFilePath, JSON.stringify(embeddingsData, null, 4));
-            } catch (error: any) {
-                new Notice(`写入嵌入文件失败: ${error.message}`);
-                return;
-            }
-        }
-        
-        new Notice(`更新完成：JSON(${updatedJsonCount}) frontmatter(${updatedFrontmatterCount}) 未更改(${noChangeCount}) 未找到(${notFoundCount}) 失败(${hashFailCount})`);
-    }
+    // 旧版更新哈希功能已废弃，保留占位避免潜在引用错误。
 
     // 批量添加哈希边界标记
     async addHashBoundaryMarkers(targetRelativePaths: string): Promise<OperationResult<{processedFiles: number, updatedFiles: number}>> {
