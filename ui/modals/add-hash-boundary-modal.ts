@@ -49,7 +49,7 @@ export class AddHashBoundaryModal extends Modal {
         
         const descEl = settingDiv.createDiv();
         descEl.addClass('setting-item-description');
-        descEl.setText('为指定的笔记文件添加 <!-- HASH_BOUNDARY --> 标记。请输入一个或多个仓库相对路径 (用英文逗号 "," 分隔)。请使用正斜杠 "/" 作为路径分隔符。可以是具体文件或文件夹 (例如：文件夹1/笔记.md, 文件夹2/)。');
+        descEl.setText('为指定的笔记文件添加 <!-- HASH_BOUNDARY --> 标记。请输入一个或多个仓库相对路径 (用英文逗号 "," 分隔)。请使用正斜杠 "/" 作为路径分隔符。(例如：文件夹1/笔记.md, 文件夹2/)。');
         
         // 创建路径输入控件容器
         const inputContainer = settingDiv.createDiv();
@@ -59,7 +59,7 @@ export class AddHashBoundaryModal extends Modal {
         this.inputEl = document.createElement('textarea');
         this.inputEl.addClass('jina-path-textarea');
         this.inputEl.setAttr('rows', '3');
-        this.inputEl.setAttr('placeholder', '例如：Notes/Note1.md, 文件夹/ 或留空处理所有文件');
+        this.inputEl.setAttr('placeholder', 'Notes/Note1.md, 留空处理所有文件');
         this.inputEl.value = this.filePaths;
         inputContainer.appendChild(this.inputEl);
         

@@ -1,7 +1,7 @@
 import { App, Notice, PluginSettingTab, Setting } from 'obsidian';
 import { AIProvider } from '../models/interfaces';
 import { DEFAULT_AI_MODELS } from '../models/constants';
-import { DEFAULT_SETTINGS, DEFAULT_SCORING_PROMPT } from '../models/settings';
+import { DEFAULT_SETTINGS, DEFAULT_SCORING_PROMPT, DEFAULT_TAG_PROMPT } from '../models/settings';
 
 export class JinaLinkerSettingTab extends PluginSettingTab {
     plugin: any;
@@ -19,8 +19,8 @@ export class JinaLinkerSettingTab extends PluginSettingTab {
         // API 密钥设置部分
         containerEl.createEl('div', { cls: 'jina-settings-section', text: '' }).innerHTML = '<div class="jina-settings-section-title">基本设置</div>';
 
-        // API 密钥设置部分
-        containerEl.createEl('div', { cls: 'jina-settings-section', text: '' }).innerHTML = '<div class="jina-settings-section-title">API 密钥</div>';
+        // Jina 嵌入配置部分
+        containerEl.createEl('div', { cls: 'jina-settings-section', text: '' }).innerHTML = '<div class="jina-settings-section-title">Jina 嵌入配置</div>';
 
         new Setting(containerEl)
             .setClass('jina-settings-block')
@@ -49,7 +49,35 @@ export class JinaLinkerSettingTab extends PluginSettingTab {
                     });
             });
 
-        // AI 模型配置部分
+        // Jina 模型名称
+        new Setting(containerEl)
+            .setClass('jina-settings-block')
+            .setName('Jina 模型名称')
+            .setDesc('用于生成嵌入的 Jina 模型名称。')
+            .addText(text => text
+                .setPlaceholder(String(DEFAULT_SETTINGS.jinaModelName))
+                .setValue(this.plugin.settings.jinaModelName)
+                .onChange(async (value) => {
+                    this.plugin.settings.jinaModelName = value.trim() || DEFAULT_SETTINGS.jinaModelName;
+                    await this.plugin.saveSettings();
+                })
+            );
+
+        // Jina 嵌入最大字符数
+        new Setting(containerEl)
+            .setClass('jina-settings-block')
+            .setName('Jina 嵌入最大字符数')
+            .setDesc('传递给 Jina API 进行嵌入的文本内容的最大字符数。')
+            .addText(text => text
+                .setPlaceholder(String(DEFAULT_SETTINGS.maxCharsForJina))
+                .setValue(this.plugin.settings.maxCharsForJina.toString())
+                .onChange(async (value) => {
+                    this.plugin.settings.maxCharsForJina = parseInt(value) || DEFAULT_SETTINGS.maxCharsForJina;
+                    await this.plugin.saveSettings();
+                })
+            );
+
+        // AI 智能评分配置部分
         containerEl.createEl('div', { cls: 'jina-settings-section', text: '' }).innerHTML = '<div class="jina-settings-section-title">AI 智能评分配置</div>';
 
         new Setting(containerEl)
@@ -79,7 +107,7 @@ export class JinaLinkerSettingTab extends PluginSettingTab {
         new Setting(containerEl)
             .setClass('jina-settings-block')
             .setName('默认扫描路径')
-            .setDesc('运行插件时默认扫描的文件夹路径 (逗号分隔)。使用 "/" 表示整个仓库。')
+            .setDesc('运行插件时默认扫描的文件夹路径 (半角逗号分隔)。使用 "/" 表示整个仓库。')
             .addText(text => text
                 .setPlaceholder('例如：/, 文件夹1, 文件夹2/子文件夹')
                 .setValue(this.plugin.settings.defaultScanPath)
@@ -92,7 +120,7 @@ export class JinaLinkerSettingTab extends PluginSettingTab {
         new Setting(containerEl)
             .setClass('jina-settings-block')
             .setName('排除的文件模式')
-            .setDesc('Python 脚本处理时要排除的文件名 Glob 模式 (逗号分隔)。')
+            .setDesc('Python 脚本处理时要排除的文件名 Glob 模式 (半角逗号分隔)。')
             .addText(text => text
                 .setPlaceholder('例如：*.excalidraw, draft-*.md, ZK_*')
                 .setValue(this.plugin.settings.excludedFilesPatterns)
@@ -121,32 +149,6 @@ export class JinaLinkerSettingTab extends PluginSettingTab {
         
         // 高级模型与内容参数
         containerEl.createEl('div', { cls: 'jina-settings-section', text: '' }).innerHTML = '<div class="jina-settings-section-title">高级模型与内容参数</div>';
-        
-        new Setting(containerEl)
-            .setClass('jina-settings-block')
-            .setName('Jina 模型名称')
-            .setDesc('用于生成嵌入的 Jina 模型名称。')
-            .addText(text => text
-                .setPlaceholder(String(DEFAULT_SETTINGS.jinaModelName))
-                .setValue(this.plugin.settings.jinaModelName)
-                .onChange(async (value) => {
-                    this.plugin.settings.jinaModelName = value.trim() || DEFAULT_SETTINGS.jinaModelName;
-                    await this.plugin.saveSettings();
-                })
-            );
-        
-        new Setting(containerEl)
-            .setClass('jina-settings-block')
-            .setName('Jina 嵌入最大字符数')
-            .setDesc('传递给 Jina API 进行嵌入的文本内容的最大字符数。')
-            .addText(text => text
-                .setPlaceholder(String(DEFAULT_SETTINGS.maxCharsForJina))
-                .setValue(this.plugin.settings.maxCharsForJina.toString())
-                .onChange(async (value) => {
-                    this.plugin.settings.maxCharsForJina = parseInt(value) || DEFAULT_SETTINGS.maxCharsForJina;
-                    await this.plugin.saveSettings();
-                })
-            );
         
         new Setting(containerEl)
             .setClass('jina-settings-block')
@@ -346,6 +348,81 @@ export class JinaLinkerSettingTab extends PluginSettingTab {
                     this.plugin.cancelCurrentOperation();
                 }));
         
+        // ------------------- AI 标签生成 -------------------
+        containerEl.createEl('div', { cls: 'jina-settings-section', text: '' }).innerHTML = '<div class="jina-settings-section-title">AI 标签生成</div>';
+
+        // 已移除“标签生成模式”设置，由弹窗选择生成
+
+        new Setting(containerEl)
+            .setClass('jina-settings-block')
+            .setName('每篇笔记最多标签数')
+            .addText(t=> t
+                .setPlaceholder('5')
+                .setValue(String(this.plugin.settings.maxTagsPerNote))
+                .onChange(async v=>{ this.plugin.settings.maxTagsPerNote = parseInt(v)||5; await this.plugin.saveSettings(); })
+            );
+
+        new Setting(containerEl)
+            .setClass('jina-settings-block')
+            .setName('使用自定义标签提示词')
+            .setDesc('启用后将使用下方自定义的标签提示词，而非默认提示词。')
+            .addToggle(tg => tg
+                .setValue(this.plugin.settings.useCustomTagPrompt)
+                .onChange(async v => {
+                    this.plugin.settings.useCustomTagPrompt = v;
+                    await this.plugin.saveSettings();
+                    this.display(); // 重新渲染
+                }));
+
+        // 自定义标签提示词文本框
+        const tagPromptContainer = containerEl.createEl('div', { cls: 'jina-settings-block' });
+        tagPromptContainer.createEl('div', {
+            text: '自定义标签提示词',
+            cls: 'setting-item-name'
+        });
+
+        tagPromptContainer.createEl('div', {
+            text: '自定义 AI 生成标签的提示词，将作为指令发送给 AI 模型以指导标签生成。',
+            cls: 'setting-item-description'
+        });
+
+        const tagTextareaContainer = tagPromptContainer.createEl('div', { cls: 'jina-textarea-container' });
+        const tagTextarea = tagTextareaContainer.createEl('textarea', {
+            cls: 'jina-textarea',
+            attr: {
+                rows: '10',
+                placeholder: '在此输入自定义标签提示词...'
+            }
+        });
+
+        tagTextarea.value = this.plugin.settings.customTagPrompt || DEFAULT_TAG_PROMPT;
+        tagTextarea.addEventListener('change', async () => {
+            this.plugin.settings.customTagPrompt = tagTextarea.value;
+            await this.plugin.saveSettings();
+        });
+
+        // 恢复默认按钮
+        const tagBtnContainer = tagPromptContainer.createEl('div', { cls: 'jina-button-container' });
+        const tagResetBtn = tagBtnContainer.createEl('button', {
+            text: '恢复默认提示词',
+            cls: 'mod-warning'
+        });
+
+        tagResetBtn.addEventListener('click', async () => {
+            tagTextarea.value = DEFAULT_TAG_PROMPT;
+            this.plugin.settings.customTagPrompt = DEFAULT_TAG_PROMPT;
+            await this.plugin.saveSettings();
+            new Notice('已恢复默认标签提示词');
+        });
+
+        // 根据开关禁用控件
+        if (!this.plugin.settings.useCustomTagPrompt) {
+            tagTextarea.disabled = true;
+            tagResetBtn.disabled = true;
+            tagTextarea.classList.add('jina-disabled');
+            tagResetBtn.classList.add('jina-disabled');
+        }
+        
         containerEl.createEl('div', { cls: 'jina-settings-section', text: '' }).innerHTML = '<div style="margin-top: 2em; color: var(--text-muted); font-size: 0.9em;">Jina AI Linker v' + this.plugin.manifest.version + '</div>';
 
         // 添加自定义样式
@@ -356,20 +433,10 @@ export class JinaLinkerSettingTab extends PluginSettingTab {
         const selectedProvider = this.plugin.settings.selectedAIProvider;
         const aiConfig = this.plugin.settings.aiModels[selectedProvider];
 
-        // AI 提供商启用状态
-        new Setting(containerEl)
-            .setClass('jina-settings-block')
-            .setName(`启用 ${this.getProviderDisplayName(selectedProvider)}`)
-            .setDesc(`是否启用 ${this.getProviderDisplayName(selectedProvider)} 进行智能评分。`)
-            .addToggle(toggle => toggle
-                .setValue(aiConfig.enabled)
-                .onChange(async (value) => {
-                    this.plugin.settings.aiModels[selectedProvider].enabled = value;
-                    await this.plugin.saveSettings();
-                    this.display(); // 重新渲染
-                }));
+        // 直接渲染选中 AI 提供商的配置，无需启用开关
+        aiConfig.enabled = true;
 
-        if (aiConfig.enabled) {
+        {
             // API URL 设置
             new Setting(containerEl)
                 .setClass('jina-settings-block')
@@ -459,13 +526,13 @@ export class JinaLinkerSettingTab extends PluginSettingTab {
     getModelSuggestions(provider: AIProvider): string[] {
         switch(provider) {
             case 'deepseek':
-                return ['deepseek-chat', 'deepseek-coder'];
+                return ['deepseek-chat', 'deepseek-reasoner'];
             case 'openai':
-                return ['gpt-4-turbo-preview', 'gpt-4', 'gpt-3.5-turbo'];
+                return [ 'gpt-o3-mini', 'gpt-4o'];
             case 'claude':
-                return ['claude-3-opus-20240229', 'claude-3-sonnet-20240229', 'claude-3-haiku-20240307'];
+                return ['claude-4-opus', 'claude-3.7-sonnet'];
             case 'gemini':
-                return ['gemini-pro', 'gemini-1.5-pro'];
+                return ['gemini-20.5 flash', 'gemini-2.5-pro'];
             default:
                 return [];
         }

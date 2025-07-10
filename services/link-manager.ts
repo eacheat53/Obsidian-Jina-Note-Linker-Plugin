@@ -215,20 +215,25 @@ export class LinkManager {
                 }
             }
 
-            // 处理链接插入
+            // 生成链接 markdown
             const linksSection = this.generateLinksSection(candidates);
+
+            // 如果本次没有任何链接需要插入，则保持文件原状，避免误动边界标记
+            if (!linksSection) {
+                return { processed: true, updated: false };
+            }
+
+            // 有链接需要插入才继续
             const updatedBodyContent = this.insertLinksIntoBody(bodyContent, linksSection, boundaryMarker);
-            
             const finalContent = frontmatterPart + updatedBodyContent;
-            
-            // 检查内容是否有变化
+
             if (finalContent !== originalFileContentForComparison) {
                 await this.app.vault.modify(file, finalContent);
                 log('info', `更新了 ${file.path} 的建议链接`);
                 return { processed: true, updated: true };
-            } else {
-                return { processed: true, updated: false };
             }
+
+            return { processed: true, updated: false };
             
         } catch (error: any) {
             log('error', `处理文件 ${file.path} 时发生错误`, error);

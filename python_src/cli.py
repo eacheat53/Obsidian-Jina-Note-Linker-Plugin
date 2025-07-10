@@ -27,7 +27,7 @@ from python_src.config import (
 from python_src.db.schema import MAIN_DB_SCHEMA
 from python_src.embeddings.similarity import generate_candidate_pairs
 from python_src.io.note_loader import list_markdown_files
-from python_src.io.output_writer import export_ai_scores_to_json
+from python_src.io.output_writer import export_ai_scores_to_json, export_ai_tags_to_json
 from python_src.orchestrator.embed_pipeline import process_and_embed_notes
 from python_src.orchestrator.link_scoring import score_candidates
 from python_src.utils.db import initialize_database, list_database_tables, get_db_connection
@@ -43,7 +43,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Jina AI 处理工具（全新架构）")
     p.add_argument("--project_root", required=True, help="项目根目录绝对路径")
     p.add_argument("--output_dir", default=".", help="输出数据库目录（相对 project_root）")
-    p.add_argument("--jina_api_key", required=True, help="Jina API Key")
+    p.add_argument("--jina_api_key", default="", help="Jina API Key (可选，无则跳过嵌入生成)")
     p.add_argument("--jina_model_name", default="jina-embeddings-v3")
     p.add_argument("--max_chars_for_jina", type=int, default=8000)
 
@@ -81,6 +81,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--export_json", action="store_true", help="导出AI评分数据到JSON")
     p.add_argument("--export_json_only", action="store_true", help="仅导出AI评分数据到JSON，不执行其他处理")
     p.add_argument("--no_export_json", action="store_true", help="不导出AI评分数据到JSON")
+    # 标签生成
+    p.add_argument("--tags_mode", choices=["force","smart","skip"], default="skip",
+                   help="AI 标签生成模式: force=重新生成, smart=仅新笔记, skip=跳过")
     p.add_argument("--save_api_responses", action="store_true", default=True,
                    help="是否保存API请求和响应到数据库中")
     p.add_argument("--test_ai_responses_db", action="store_true", help="测试ai_responses表是否可正常使用")
@@ -113,9 +116,26 @@ def main() -> None:  # pragma: no cover
     # 若数据库不存在则初始化结构
     initialize_database(main_db_path, MAIN_DB_SCHEMA)
 
-    # 列出所有表以确认结构
+    # 列出表并确保最新结构
     list_database_tables(main_db_path)
-    
+
+    from python_src.utils.db import check_table_exists
+    missing_tables = []
+    for tbl in ("note_tags", "ai_responses"):
+        if not check_table_exists(main_db_path, tbl):
+            missing_tables.append(tbl)
+
+    if missing_tables:
+        logger.info("检测到缺失表 %s, 将更新数据库结构", ", ".join(missing_tables))
+        import sqlite3 as _sql
+        conn_fix = _sql.connect(main_db_path)
+        try:
+            conn_fix.executescript(MAIN_DB_SCHEMA)
+            conn_fix.commit()
+            logger.info("已执行 MAIN_DB_SCHEMA 以补齐缺失表")
+        finally:
+            conn_fix.close()
+
     # 测试ai_responses表
     if args.test_ai_responses_db:
         logger.info("测试ai_responses表...")
@@ -128,19 +148,19 @@ def main() -> None:  # pragma: no cover
                 INSERT INTO ai_responses (
                     batch_id, ai_provider, model_name, request_content, response_content, prompt_type
                 ) VALUES (?, ?, ?, ?, ?, ?)
-                """, 
+                """,
                 (test_batch_id, "test", "test-model", "测试请求内容", "测试响应内容", "default")
             )
             conn.commit()
             logger.info("测试数据插入成功")
-            
+
             # 查询测试数据
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM ai_responses WHERE batch_id = ?", (test_batch_id,))
             rows = cursor.fetchall()
             if rows:
                 logger.info(f"成功查询到测试数据: {rows}")
-                
+
                 # 清理测试数据
                 conn.execute("DELETE FROM ai_responses WHERE batch_id = ?", (test_batch_id,))
                 conn.commit()
@@ -153,7 +173,7 @@ def main() -> None:  # pragma: no cover
             logger.error(f"详细错误: {traceback.format_exc()}")
         finally:
             conn.close()
-            
+
         # 验证测试完成后退出
         logger.info("ai_responses表测试完成")
         return
@@ -180,25 +200,27 @@ def main() -> None:  # pragma: no cover
         logger.warning("未找到任何 Markdown 文件，流程结束。")
         return
 
-    # Embeddings
-    embeddings_data = process_and_embed_notes(
-        project_root_abs,
-        markdown_files,
-        main_db_path,
-        jina_api_key_to_use=args.jina_api_key,
-        jina_model_name_to_use=args.jina_model_name,
-        max_chars_for_jina_to_use=args.max_chars_for_jina,
-        embedding_batch_size=args.embedding_batch_size,
-    )
+    embeddings_data = {
+        "files": {}
+    }
+
+    if args.jina_api_key:
+        embeddings_data = process_and_embed_notes(
+            project_root_abs,
+            markdown_files,
+            main_db_path,
+            jina_api_key_to_use=args.jina_api_key,
+            jina_model_name_to_use=args.jina_model_name,
+            max_chars_for_jina_to_use=args.max_chars_for_jina,
+            embedding_batch_size=args.embedding_batch_size,
+        )
+    else:
+        logger.warning("未提供 Jina API Key, 跳过嵌入生成阶段。")
 
     # Candidate pairs
-    candidates = generate_candidate_pairs(embeddings_data, args.similarity_threshold)
+    candidates = generate_candidate_pairs(embeddings_data, args.similarity_threshold) if embeddings_data.get("files") else []
 
-    if (
-        args.ai_api_key
-        and args.ai_scoring_mode != "skip"
-        and candidates
-    ):
+    if args.ai_api_key and args.ai_scoring_mode != "skip" and candidates:
         score_candidates(
             candidates,
             project_root_abs,
@@ -217,9 +239,33 @@ def main() -> None:  # pragma: no cover
             max_total_chars_per_request=args.max_total_chars_per_request,
             save_api_responses=args.save_api_responses,
         )
+    elif not args.ai_api_key:
+        logger.warning("未提供 AI API Key, 跳过 AI 评分阶段。")
 
     if not args.no_export_json or args.export_json:
         export_ai_scores_to_json(project_root_abs, output_dir_abs, min_score=args.min_ai_score)
+
+    # 标签生成
+    if args.tags_mode != "skip":
+        from python_src.orchestrator.tag_generation import generate_tags  # 局部导入避免循环
+        generate_tags(
+            project_root_abs,
+            main_db_path,
+            ai_provider=args.ai_provider,
+            ai_api_url=args.ai_api_url,
+            ai_api_key=args.ai_api_key,
+            ai_model_name=args.ai_model_name,
+            max_content_length_for_ai=args.max_content_length_for_ai,
+            force_regen=(args.tags_mode == "force"),
+            batch_size=args.ai_scoring_batch_size,
+            custom_prompt=args.custom_scoring_prompt,
+            use_custom_prompt=args.use_custom_scoring_prompt,
+            max_chars_per_note=args.max_chars_per_note,
+            max_total_chars_per_request=args.max_total_chars_per_request,
+            save_api_responses=args.save_api_responses,
+        )
+
+        export_ai_tags_to_json(project_root_abs, output_dir_abs)
 
     logger.info("流程完成，总耗时 %.2fs", time.time() - start_time)
 

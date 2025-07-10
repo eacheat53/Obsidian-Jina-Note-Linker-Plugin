@@ -3,13 +3,15 @@ import { JinaLinkerSettings, DEFAULT_SETTINGS } from './models/settings';
 import { PerformanceMonitor } from './utils/performance-monitor';
 import { CacheManager } from './utils/cache-manager';
 import { PythonBridge } from './utils/python-bridge';
-import { HashManager } from './services/ash-manager';
+import { HashManager } from './services/hash-manager';
 import { LinkManager } from './services/link-manager';
 import { FileProcessor } from './services/file-processor';
+import { TagManager } from './services/tag-manager';
 import { JinaLinkerSettingTab } from './ui/settings-tab';
 import { RunPluginModal } from './ui/modals/run-plugin-modal';
 import { ProgressModal } from './ui/modals/progress-modal';
 import { AddHashBoundaryModal } from './ui/modals/add-hash-boundary-modal';
+import { AddAiTagsModal } from './ui/modals/add-ai-tags-modal';
 import { log } from './utils/error-handler';
 import { DEFAULT_AI_MODELS } from './models/constants';
 import { AIProvider, RunOptions } from './models/interfaces';
@@ -22,6 +24,7 @@ export default class JinaLinkerPlugin extends Plugin {
     private pythonBridge: PythonBridge;
     private hashManager: HashManager;
     private linkManager: LinkManager;
+    private tagManager: TagManager;
     private fileProcessor: FileProcessor;
     private notificationService: NotificationService;
 
@@ -36,14 +39,13 @@ export default class JinaLinkerPlugin extends Plugin {
         this.pythonBridge = new PythonBridge(this.settings);
         this.hashManager = new HashManager(this.app, this.cacheManager);
         this.linkManager = new LinkManager(this.app, this.settings, this.cacheManager);
+        this.tagManager = new TagManager(this.app, this.settings, this.cacheManager);
         this.fileProcessor = new FileProcessor(this.app, this.cacheManager);
 
         // 初始化通知服务
         this.notificationService = NotificationService.getInstance();
 
-        if (!this.settings.dataMigrationCompleted) {
-            await this.runMigration();
-        }
+        // 首次使用不再执行旧 JSON→SQLite 迁移逻辑
 
         console.log('✅ 性能监控器和服务初始化完成');
         console.log('🎉 Jina AI Linker 插件加载完成！');
@@ -80,7 +82,7 @@ export default class JinaLinkerPlugin extends Plugin {
             name: '批量添加哈希边界标记',
             callback: () => {
                 console.log('🏷️ 用户启动：批量添加哈希边界标记功能');
-                new AddHashBoundaryModal(this.app, this, async (targetPaths) => {
+                new AddHashBoundaryModal(this.app, this, async (targetPaths: string) => {
                     const result = await this.fileProcessor.addHashBoundaryMarkers(targetPaths);
                         if (result.success) {
                         const { processedFiles, updatedFiles } = result.data!;
@@ -88,6 +90,18 @@ export default class JinaLinkerPlugin extends Plugin {
                             } else {
                         new Notice('❌ 批量添加哈希边界标记失败');
                     }
+                }).open();
+            }
+        });
+
+        // ---- 新增：仅插入 AI 标签 ----
+        this.addCommand({
+            id: 'insert-ai-tags-into-notes',
+            name: '批量插入 AI 标签到笔记',
+            callback: () => {
+                console.log('🏷️ 用户启动：批量插入 AI 标签功能');
+                new AddAiTagsModal(this.app, this, (paths: string, mode: 'smart'|'force') => {
+                    this.runTagOnlyFlow(paths, mode);
                 }).open();
             }
         });
@@ -123,7 +137,7 @@ export default class JinaLinkerPlugin extends Plugin {
                 item.setTitle("批量添加哈希边界标记")
                    .setIcon("hash")
                    .onClick(() => {
-                        new AddHashBoundaryModal(this.app, this, async (targetPaths) => {
+                        new AddHashBoundaryModal(this.app, this, async (targetPaths: string) => {
                             const result = await this.fileProcessor.addHashBoundaryMarkers(targetPaths);
                             if (result.success) {
                                 const { processedFiles, updatedFiles } = result.data!;
@@ -131,6 +145,16 @@ export default class JinaLinkerPlugin extends Plugin {
                             } else {
                                 new Notice('❌ 批量添加哈希边界标记失败');
                             }
+                        }).open();
+                   });
+            });
+
+            menu.addItem((item: any) => {
+                item.setTitle("批量插入 AI 标签")
+                   .setIcon("tag")
+                   .onClick(() => {
+                        new AddAiTagsModal(this.app, this, (paths: string, mode: 'smart'|'force') => {
+                            this.runTagOnlyFlow(paths, mode);
                         }).open();
                    });
             });
@@ -164,6 +188,9 @@ export default class JinaLinkerPlugin extends Plugin {
                     
                     if (insertResult.success) {
                         const { processedFiles, updatedFiles } = insertResult.data!;
+                        // 标签插入
+                        await this.tagManager.insertAIGeneratedTagsIntoNotes(options.scanPath);
+
                         progressModal.setCompleted(`✅ 处理完成！检查了 ${processedFiles} 个文件，更新了 ${updatedFiles} 个文件`);
                         
                         // 显示性能统计
@@ -184,6 +211,42 @@ export default class JinaLinkerPlugin extends Plugin {
         }).open();
     }
 
+    // 仅生成并插入 AI 标签的快捷流程
+    private async runTagOnlyFlow(targetPaths: string, mode: 'smart' | 'force') {
+        // 临时覆盖 tagsMode 以便传递给 Python
+        const originalMode = this.settings.tagsMode;
+        this.settings.tagsMode = mode;
+
+        const progress = new ProgressModal(this.app, '生成并插入 AI 标签', () => this.pythonBridge.cancelOperation());
+        progress.open();
+
+        try {
+            // 1. 后端：只生成标签
+            progress.updateProgress(0, 2, '运行后端', '生成 AI 标签…');
+            const pyRes = await this.pythonBridge.runPythonScript(
+                targetPaths || '/',
+                'skip', // 评分跳过
+                this.manifest.dir || '',
+                (this.app.vault.adapter as any).getBasePath()
+            );
+
+            if (!pyRes.success) throw new Error('Python 执行失败');
+
+            // 2. 前端：写入 front-matter
+            progress.updateProgress(1, 2, '写入标签', '插入 front-matter…');
+            const { processed, updated } = await this.tagManager.insertAIGeneratedTagsIntoNotes(targetPaths);
+
+            progress.setCompleted(`✅ 处理 ${processed} 文件，更新 ${updated}`);
+            setTimeout(() => progress.close(), 2500);
+        } catch (err) {
+            progress.setError('生成/插入标签失败');
+            log('error', 'runTagOnlyFlow error', err);
+        } finally {
+            // 恢复原始模式，避免影响其他功能
+            this.settings.tagsMode = originalMode;
+        }
+    }
+
     // 计算单个文件的哈希值
     private async calculateHashForFile(filePath: string) {
                     const normalizedFilePath = normalizePath(filePath);
@@ -200,31 +263,8 @@ export default class JinaLinkerPlugin extends Plugin {
                     }
     }
 
-    async runMigration(): Promise<void> {
-        this.notificationService.showNotice('Data migration to SQLite required. Starting process...', 5000);
-        log('info', 'Data migration to SQLite required. Starting process...');
-
-        if (!this.manifest.dir) {
-            const errorMsg = 'Plugin directory not found. Cannot run migration.';
-            log('error', errorMsg);
-            this.notificationService.showError(errorMsg);
-            return Promise.reject(new Error(errorMsg));
-        }
-
-        try {
-            await this.pythonBridge.runMigration(
-                this.manifest.dir, 
-                (this.app.vault.adapter as any).getBasePath()
-            );
-            
-            this.settings.dataMigrationCompleted = true;
-            await this.saveSettings();
-            
-            return Promise.resolve();
-        } catch (error) {
-            return Promise.reject(error);
-        }
-    }
+    // 迁移逻辑已废弃，保留空实现避免旧代码引用
+    async runMigration(): Promise<void> { return Promise.resolve(); }
 
     async loadSettings() {
         const loadedData = await this.loadData();

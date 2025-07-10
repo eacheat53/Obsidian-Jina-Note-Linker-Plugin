@@ -80,5 +80,15 @@ CREATE TABLE IF NOT EXISTS ai_responses (
 );
 CREATE INDEX IF NOT EXISTS idx_ai_responses_batch ON ai_responses(batch_id);
 
+-- Note Tags 表: 用于保存笔记的标签和置信度
+CREATE TABLE IF NOT EXISTS note_tags (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    note_id   TEXT NOT NULL,
+    tag       TEXT NOT NULL,
+    confidence REAL,
+    UNIQUE(note_id, tag)
+);
+CREATE INDEX IF NOT EXISTS idx_note_tags_note ON note_tags(note_id);
+
 INSERT OR IGNORE INTO metadata (key, value) VALUES ('schema_version', '3.0');
 """

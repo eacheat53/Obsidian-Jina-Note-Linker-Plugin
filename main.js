@@ -45,7 +45,6 @@ var SUGGESTED_LINKS_TITLE = "## \u5EFA\u8BAE\u94FE\u63A5";
 var LINKS_START_MARKER = "<!-- LINKS_START -->";
 var LINKS_END_MARKER = "<!-- LINKS_END -->";
 var DEFAULT_OUTPUT_DIR_IN_VAULT = ".jina-linker";
-var EMBEDDINGS_FILE_NAME = "embeddings.json";
 var DEFAULT_AI_MODELS = {
   deepseek: {
     provider: "deepseek",
@@ -125,6 +124,7 @@ var DEFAULT_SCORING_PROMPT = `\u4F5C\u4E3A\u7B14\u8BB0\u5173\u8054\u6027\u8BC4\u
   \u2022 \u5E76\u7F6E\u9605\u8BFB\u65E0\u6CD5\u4EA7\u751F\u6709\u610F\u4E49\u7684\u5173\u8054\u6216\u542F\u53D1
 
 \u8BF7\u53EA\u56DE\u590D\u4E00\u4E2A0-10\u7684\u6574\u6570\u8BC4\u5206\uFF0C\u4E0D\u8981\u6709\u4EFB\u4F55\u89E3\u91CA\u6216\u989D\u5916\u6587\u5B57\uFF01`;
+var DEFAULT_TAG_PROMPT = `\u8BF7\u4E3A\u4E0B\u5217\u7B14\u8BB0\u751F\u6210 3~5 \u4E2A\u7B80\u6D01\u4E2D\u6587\u6807\u7B7E\uFF0C\u7528\u9017\u53F7\u5206\u9694\uFF0C\u907F\u514D\u7A7A\u683C\u3002\u683C\u5F0F: <title>: tag1, tag2, tag3`;
 var DEFAULT_SETTINGS = {
   pythonPath: "",
   jinaApiKey: "",
@@ -140,13 +140,18 @@ var DEFAULT_SETTINGS = {
   maxCandidatesPerSourceForAIScoring: 20,
   minAiScoreForLinkInsertion: 6,
   maxLinksToInsertPerNote: 10,
-  dataMigrationCompleted: false,
+  dataMigrationCompleted: true,
   customScoringPrompt: DEFAULT_SCORING_PROMPT,
   useCustomScoringPrompt: false,
   // 批量处理默认设置
   maxPairsPerRequest: 10,
   maxCharsPerNote: 2e3,
-  maxTotalCharsPerRequest: 23e3
+  maxTotalCharsPerRequest: 23e3,
+  // 标签生成默认
+  tagsMode: "smart",
+  maxTagsPerNote: 5,
+  useCustomTagPrompt: false,
+  customTagPrompt: DEFAULT_TAG_PROMPT
 };
 
 // utils/performance-monitor.ts
@@ -443,6 +448,11 @@ var PythonBridge = class {
           args.push("--use_custom_scoring_prompt");
           args.push("--custom_scoring_prompt", this.settings.customScoringPrompt);
         }
+        args.push("--tags_mode", this.settings.tagsMode);
+        if (this.settings.useCustomTagPrompt) {
+          args.push("--use_custom_scoring_prompt");
+          args.push("--custom_scoring_prompt", this.settings.customTagPrompt);
+        }
         if (scanPathFromModal && scanPathFromModal.trim() !== "/") {
           args.push("--scan_target_folders");
           const folders = scanPathFromModal.split(",").map((f) => f.trim()).filter((f) => f);
@@ -567,6 +577,11 @@ var PythonBridge = class {
       log("error", errorMsg);
       this.notificationService.showError(errorMsg);
       return Promise.reject(new Error(errorMsg));
+    }
+    if (!this.settings.pythonPath) {
+      log("warn", "\u7F3A\u5C11 pythonPath\uFF0C\u8DF3\u8FC7\u6570\u636E\u8FC1\u79FB\u3002");
+      this.notificationService.showNotice("\u26A0\uFE0F \u672A\u914D\u7F6E Python \u8DEF\u5F84\uFF0C\u5DF2\u8DF3\u8FC7\u65E7\u6570\u636E\u8FC1\u79FB", 4e3);
+      return Promise.resolve();
     }
     return new Promise((resolve, reject) => {
       const scriptToExecutePath = path.join(vaultBasePath, manifestDir, "main.py");
@@ -832,15 +847,17 @@ var LinkManager = class {
         }
       }
       const linksSection = this.generateLinksSection(candidates);
+      if (!linksSection) {
+        return { processed: true, updated: false };
+      }
       const updatedBodyContent = this.insertLinksIntoBody(bodyContent, linksSection, boundaryMarker);
       const finalContent = frontmatterPart + updatedBodyContent;
       if (finalContent !== originalFileContentForComparison) {
         await this.app.vault.modify(file, finalContent);
         log("info", `\u66F4\u65B0\u4E86 ${file.path} \u7684\u5EFA\u8BAE\u94FE\u63A5`);
         return { processed: true, updated: true };
-      } else {
-        return { processed: true, updated: false };
       }
+      return { processed: true, updated: false };
     } catch (error) {
       log("error", `\u5904\u7406\u6587\u4EF6 ${file.path} \u65F6\u53D1\u751F\u9519\u8BEF`, error);
       return null;
@@ -941,7 +958,6 @@ ${contentAfterBoundary}`;
 
 // services/file-processor.ts
 var import_obsidian6 = require("obsidian");
-var path4 = __toESM(require("path"));
 var FileProcessor = class {
   constructor(app, cacheManager) {
     this.app = app;
@@ -954,100 +970,7 @@ var FileProcessor = class {
       (file) => file instanceof import_obsidian6.TFile && file.extension === "md" && file.path.startsWith(folder.path)
     );
   }
-  // 更新嵌入JSON和文件frontmatter中的哈希值
-  async updateHashesInEmbeddingsFile(targetRelativePaths) {
-    new import_obsidian6.Notice(`\u5F00\u59CB\u5904\u7406 ${targetRelativePaths.length} \u4E2A\u8DEF\u5F84\uFF0C\u66F4\u65B0\u54C8\u5E0C\u503C...`);
-    const outputDirInVault = DEFAULT_OUTPUT_DIR_IN_VAULT;
-    const embeddingsFilePath = (0, import_obsidian6.normalizePath)(path4.join(outputDirInVault, EMBEDDINGS_FILE_NAME));
-    let embeddingsData;
-    try {
-      if (!await this.app.vault.adapter.exists(embeddingsFilePath)) {
-        new import_obsidian6.Notice(`\u9519\u8BEF: \u5D4C\u5165\u6587\u4EF6 "${embeddingsFilePath}" \u672A\u627E\u5230\u3002`);
-        return;
-      }
-      const rawData = await this.app.vault.adapter.read(embeddingsFilePath);
-      embeddingsData = JSON.parse(rawData);
-      if (!embeddingsData.files || typeof embeddingsData.files !== "object") {
-        throw new Error("\u5D4C\u5165\u6587\u4EF6\u7ED3\u6784\u4E0D\u6B63\u786E\uFF0C\u7F3A\u5C11 'files' \u5BF9\u8C61\u3002");
-      }
-    } catch (error) {
-      new import_obsidian6.Notice(`\u8BFB\u53D6\u6216\u89E3\u6790\u5D4C\u5165\u6587\u4EF6 "${embeddingsFilePath}" \u5931\u8D25: ${error.message}`);
-      return;
-    }
-    const hashManager = new HashManager(this.app, this.cacheManager);
-    let updatedJsonCount = 0, updatedFrontmatterCount = 0, notFoundCount = 0, hashFailCount = 0, noChangeCount = 0;
-    let files = [];
-    for (const rel of targetRelativePaths) {
-      const norm = (0, import_obsidian6.normalizePath)(rel);
-      const af = this.app.vault.getAbstractFileByPath(norm);
-      if (af instanceof import_obsidian6.TFolder) {
-        files.push(...this.getMarkdownFilesInFolder(af));
-      } else if (af instanceof import_obsidian6.TFile && af.extension === "md") {
-        files.push(af);
-      }
-    }
-    files = Array.from(new Set(files));
-    for (const tFile of files) {
-      const relPath = tFile.path;
-      const newHash = await hashManager.calculateNoteContentHashForFile(tFile);
-      if (!newHash) {
-        hashFailCount++;
-        continue;
-      }
-      if (embeddingsData.files.hasOwnProperty(relPath)) {
-        if (embeddingsData.files[relPath].hash !== newHash) {
-          embeddingsData.files[relPath].hash = newHash;
-          embeddingsData.files[relPath].last_hash_updated_at = (/* @__PURE__ */ new Date()).toISOString();
-          updatedJsonCount++;
-        }
-      } else {
-        notFoundCount++;
-      }
-      try {
-        const content = await this.cacheManager.getCachedFileContent(tFile, this.app.vault);
-        const fmRegex = /^---\s*\n([\s\S]*?)\n---\s*\n/;
-        const fmMatch = content.match(fmRegex);
-        let newContent;
-        if (fmMatch) {
-          const fmBody = fmMatch[1];
-          const jinaRegex = /^jina_hash:\s*.*$/m;
-          if (jinaRegex.test(fmBody)) {
-            newContent = content.replace(jinaRegex, `jina_hash: ${newHash}`);
-          } else {
-            const replaced = `${fmBody}
-jina_hash: ${newHash}`;
-            newContent = content.replace(fmRegex, `---
-${replaced}
----
-`);
-          }
-        } else {
-          newContent = `---
-jina_hash: ${newHash}
----
-
-${content}`;
-        }
-        if (newContent !== content) {
-          await this.app.vault.modify(tFile, newContent);
-          updatedFrontmatterCount++;
-        } else {
-          noChangeCount++;
-        }
-      } catch (error) {
-        log("error", `\u66F4\u65B0\u524D\u7F6E\u5C5E\u6027\u5931\u8D25 ${relPath}`, error);
-      }
-    }
-    if (updatedJsonCount > 0) {
-      try {
-        await this.app.vault.adapter.write(embeddingsFilePath, JSON.stringify(embeddingsData, null, 4));
-      } catch (error) {
-        new import_obsidian6.Notice(`\u5199\u5165\u5D4C\u5165\u6587\u4EF6\u5931\u8D25: ${error.message}`);
-        return;
-      }
-    }
-    new import_obsidian6.Notice(`\u66F4\u65B0\u5B8C\u6210\uFF1AJSON(${updatedJsonCount}) frontmatter(${updatedFrontmatterCount}) \u672A\u66F4\u6539(${noChangeCount}) \u672A\u627E\u5230(${notFoundCount}) \u5931\u8D25(${hashFailCount})`);
-  }
+  // 旧版更新哈希功能已废弃，保留占位避免潜在引用错误。
   // 批量添加哈希边界标记
   async addHashBoundaryMarkers(targetRelativePaths) {
     new import_obsidian6.Notice("\u{1F504} \u5F00\u59CB\u6279\u91CF\u6DFB\u52A0\u54C8\u5E0C\u8FB9\u754C\u6807\u8BB0...");
@@ -1100,9 +1023,81 @@ ${content}`;
   }
 };
 
-// ui/settings-tab.ts
+// services/tag-manager.ts
 var import_obsidian7 = require("obsidian");
-var JinaLinkerSettingTab = class extends import_obsidian7.PluginSettingTab {
+var TagManager = class {
+  constructor(app, settings, cacheManager) {
+    this.app = app;
+    this.settings = settings;
+    this.cacheManager = cacheManager;
+  }
+  async insertAIGeneratedTagsIntoNotes(targetFoldersOption) {
+    var _a;
+    const vaultBase = this.app.vault.adapter.basePath || "";
+    const jsonPath = `${vaultBase}/.jina-linker/ai_tags.json`;
+    let data = {};
+    try {
+      data = JSON.parse(await window.require("fs").promises.readFile(jsonPath, "utf-8"));
+    } catch (e) {
+      log("warn", "\u8BFB\u53D6 ai_tags.json \u5931\u8D25", e);
+      return { processed: 0, updated: 0 };
+    }
+    const tagMap = data.ai_tags_by_note || {};
+    const targetFolders = targetFoldersOption.split(",").map((s) => s.trim()).filter(Boolean);
+    const shouldProcessAll = targetFoldersOption.trim() === "/" || targetFolders.length === 0;
+    let processed = 0, updated = 0;
+    for (const filePath of Object.keys(tagMap)) {
+      if (!shouldProcessAll) {
+        const inFolder = targetFolders.some((f) => filePath.startsWith(f.endsWith("/") ? f : f + "/") || filePath === f);
+        if (!inFolder)
+          continue;
+      }
+      const file = this.app.vault.getAbstractFileByPath(filePath);
+      if (!(file instanceof import_obsidian7.TFile))
+        continue;
+      const tagsToInsert = tagMap[filePath].slice(0, this.settings.maxTagsPerNote);
+      if (!tagsToInsert.length)
+        continue;
+      let content = await this.cacheManager.getCachedFileContent(file, this.app.vault);
+      const fmRegex = /^---\s*$[\s\S]*?^---\s*$\n?/m;
+      let fm = "";
+      if (fmRegex.test(content)) {
+        fm = content.match(fmRegex)[0];
+      } else {
+        fm = "---\n---\n";
+        content = fm + content;
+      }
+      const body = content.slice(fm.length);
+      const fmObj = fmRegex.test(content) ? (0, import_obsidian7.parseYaml)(fm.replace(/^---\s*|---\s*$/g, "")) || {} : {};
+      let tagsArr = Array.isArray(fmObj.tags) ? fmObj.tags : [];
+      const beforeLen = tagsArr.length;
+      for (const t of tagsToInsert) {
+        if (!tagsArr.includes(t))
+          tagsArr.push(t);
+      }
+      if (tagsArr.length === beforeLen) {
+        processed++;
+        continue;
+      }
+      fmObj.tags = tagsArr;
+      const newFm = `---
+${(0, import_obsidian7.stringifyYaml)(fmObj).trim()}
+---
+`;
+      const newContent = newFm + body;
+      await this.app.vault.modify(file, newContent);
+      (_a = this.cacheManager.fileContentCache) == null ? void 0 : _a.set(file.path, { content: newContent, mtime: file.stat.mtime });
+      processed++;
+      updated++;
+    }
+    new import_obsidian7.Notice(`AI \u6807\u7B7E\u5199\u5165\u5B8C\u6210\uFF1A\u5904\u7406 ${processed} \u6587\u4EF6\uFF0C\u66F4\u65B0 ${updated}`);
+    return { processed, updated };
+  }
+};
+
+// ui/settings-tab.ts
+var import_obsidian8 = require("obsidian");
+var JinaLinkerSettingTab = class extends import_obsidian8.PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
     this.plugin = plugin;
@@ -1112,22 +1107,34 @@ var JinaLinkerSettingTab = class extends import_obsidian7.PluginSettingTab {
     containerEl.empty();
     containerEl.createEl("h2", { text: "Jina AI Linker \u63D2\u4EF6\u8BBE\u7F6E", cls: "jina-settings-header" });
     containerEl.createEl("div", { cls: "jina-settings-section", text: "" }).innerHTML = '<div class="jina-settings-section-title">\u57FA\u672C\u8BBE\u7F6E</div>';
-    containerEl.createEl("div", { cls: "jina-settings-section", text: "" }).innerHTML = '<div class="jina-settings-section-title">API \u5BC6\u94A5</div>';
-    new import_obsidian7.Setting(containerEl).setClass("jina-settings-block").setName("Jina API \u5BC6\u94A5").setDesc("\u60A8\u7684 Jina API \u5BC6\u94A5\uFF0C\u7528\u4E8E\u751F\u6210\u6587\u672C\u5D4C\u5165\u5411\u91CF\u3002").addText((text) => {
+    containerEl.createEl("div", { cls: "jina-settings-section", text: "" }).innerHTML = '<div class="jina-settings-section-title">Jina \u5D4C\u5165\u914D\u7F6E</div>';
+    new import_obsidian8.Setting(containerEl).setClass("jina-settings-block").setName("Jina API \u5BC6\u94A5").setDesc("\u60A8\u7684 Jina API \u5BC6\u94A5\uFF0C\u7528\u4E8E\u751F\u6210\u6587\u672C\u5D4C\u5165\u5411\u91CF\u3002").addText((text) => {
       text.inputEl.type = "password";
       text.setPlaceholder("\u8F93\u5165 Jina API \u5BC6\u94A5").setValue(this.plugin.settings.jinaApiKey).onChange(async (value) => {
         this.plugin.settings.jinaApiKey = value;
         await this.plugin.saveSettings();
       });
     });
-    new import_obsidian7.Setting(containerEl).setClass("jina-settings-block").setName("Python \u53EF\u6267\u884C\u8DEF\u5F84").setDesc("\u5982\u7559\u7A7A\u5219\u4F7F\u7528\u7CFB\u7EDF PATH \u4E2D\u7684 python\u3002\u53EF\u4EE5\u586B\u5199\u865A\u62DF\u73AF\u5883\u4E0B\u7684\u5B8C\u6574 python.exe \u8DEF\u5F84\u3002").addText((text) => {
+    new import_obsidian8.Setting(containerEl).setClass("jina-settings-block").setName("Python \u53EF\u6267\u884C\u8DEF\u5F84").setDesc("\u5982\u7559\u7A7A\u5219\u4F7F\u7528\u7CFB\u7EDF PATH \u4E2D\u7684 python\u3002\u53EF\u4EE5\u586B\u5199\u865A\u62DF\u73AF\u5883\u4E0B\u7684\u5B8C\u6574 python.exe \u8DEF\u5F84\u3002").addText((text) => {
       text.setPlaceholder("\u4F8B\u5982 C:/Python311/python.exe").setValue(this.plugin.settings.pythonPath || "").onChange(async (value) => {
         this.plugin.settings.pythonPath = value.trim();
         await this.plugin.saveSettings();
       });
     });
+    new import_obsidian8.Setting(containerEl).setClass("jina-settings-block").setName("Jina \u6A21\u578B\u540D\u79F0").setDesc("\u7528\u4E8E\u751F\u6210\u5D4C\u5165\u7684 Jina \u6A21\u578B\u540D\u79F0\u3002").addText(
+      (text) => text.setPlaceholder(String(DEFAULT_SETTINGS.jinaModelName)).setValue(this.plugin.settings.jinaModelName).onChange(async (value) => {
+        this.plugin.settings.jinaModelName = value.trim() || DEFAULT_SETTINGS.jinaModelName;
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian8.Setting(containerEl).setClass("jina-settings-block").setName("Jina \u5D4C\u5165\u6700\u5927\u5B57\u7B26\u6570").setDesc("\u4F20\u9012\u7ED9 Jina API \u8FDB\u884C\u5D4C\u5165\u7684\u6587\u672C\u5185\u5BB9\u7684\u6700\u5927\u5B57\u7B26\u6570\u3002").addText(
+      (text) => text.setPlaceholder(String(DEFAULT_SETTINGS.maxCharsForJina)).setValue(this.plugin.settings.maxCharsForJina.toString()).onChange(async (value) => {
+        this.plugin.settings.maxCharsForJina = parseInt(value) || DEFAULT_SETTINGS.maxCharsForJina;
+        await this.plugin.saveSettings();
+      })
+    );
     containerEl.createEl("div", { cls: "jina-settings-section", text: "" }).innerHTML = '<div class="jina-settings-section-title">AI \u667A\u80FD\u8BC4\u5206\u914D\u7F6E</div>';
-    new import_obsidian7.Setting(containerEl).setClass("jina-settings-block").setName("AI \u63D0\u4F9B\u5546").setDesc("\u9009\u62E9\u7528\u4E8E\u667A\u80FD\u8BC4\u5206\u7684 AI \u63D0\u4F9B\u5546\u3002").addDropdown((dropdown) => {
+    new import_obsidian8.Setting(containerEl).setClass("jina-settings-block").setName("AI \u63D0\u4F9B\u5546").setDesc("\u9009\u62E9\u7528\u4E8E\u667A\u80FD\u8BC4\u5206\u7684 AI \u63D0\u4F9B\u5546\u3002").addDropdown((dropdown) => {
       dropdown.addOption("deepseek", "DeepSeek");
       dropdown.addOption("openai", "OpenAI");
       dropdown.addOption("claude", "Claude (Anthropic)");
@@ -1142,75 +1149,63 @@ var JinaLinkerSettingTab = class extends import_obsidian7.PluginSettingTab {
     });
     this.displayAIProviderSettings(containerEl);
     containerEl.createEl("div", { cls: "jina-settings-section", text: "" }).innerHTML = '<div class="jina-settings-section-title">\u5904\u7406\u53C2\u6570</div>';
-    new import_obsidian7.Setting(containerEl).setClass("jina-settings-block").setName("\u9ED8\u8BA4\u626B\u63CF\u8DEF\u5F84").setDesc('\u8FD0\u884C\u63D2\u4EF6\u65F6\u9ED8\u8BA4\u626B\u63CF\u7684\u6587\u4EF6\u5939\u8DEF\u5F84 (\u9017\u53F7\u5206\u9694)\u3002\u4F7F\u7528 "/" \u8868\u793A\u6574\u4E2A\u4ED3\u5E93\u3002').addText(
+    new import_obsidian8.Setting(containerEl).setClass("jina-settings-block").setName("\u9ED8\u8BA4\u626B\u63CF\u8DEF\u5F84").setDesc('\u8FD0\u884C\u63D2\u4EF6\u65F6\u9ED8\u8BA4\u626B\u63CF\u7684\u6587\u4EF6\u5939\u8DEF\u5F84 (\u534A\u89D2\u9017\u53F7\u5206\u9694)\u3002\u4F7F\u7528 "/" \u8868\u793A\u6574\u4E2A\u4ED3\u5E93\u3002').addText(
       (text) => text.setPlaceholder("\u4F8B\u5982\uFF1A/, \u6587\u4EF6\u59391, \u6587\u4EF6\u59392/\u5B50\u6587\u4EF6\u5939").setValue(this.plugin.settings.defaultScanPath).onChange(async (value) => {
         this.plugin.settings.defaultScanPath = value.trim() || DEFAULT_SETTINGS.defaultScanPath;
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian7.Setting(containerEl).setClass("jina-settings-block").setName("\u6392\u9664\u7684\u6587\u4EF6\u6A21\u5F0F").setDesc("Python \u811A\u672C\u5904\u7406\u65F6\u8981\u6392\u9664\u7684\u6587\u4EF6\u540D Glob \u6A21\u5F0F (\u9017\u53F7\u5206\u9694)\u3002").addText(
+    new import_obsidian8.Setting(containerEl).setClass("jina-settings-block").setName("\u6392\u9664\u7684\u6587\u4EF6\u6A21\u5F0F").setDesc("Python \u811A\u672C\u5904\u7406\u65F6\u8981\u6392\u9664\u7684\u6587\u4EF6\u540D Glob \u6A21\u5F0F (\u534A\u89D2\u9017\u53F7\u5206\u9694)\u3002").addText(
       (text) => text.setPlaceholder("\u4F8B\u5982\uFF1A*.excalidraw, draft-*.md, ZK_*").setValue(this.plugin.settings.excludedFilesPatterns).onChange(async (value) => {
         this.plugin.settings.excludedFilesPatterns = value;
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian7.Setting(containerEl).setClass("jina-settings-block").setName("Jina \u76F8\u4F3C\u5EA6\u9608\u503C").setDesc("Jina \u5D4C\u5165\u5411\u91CF\u4E4B\u95F4\u8BA1\u7B97\u4F59\u5F26\u76F8\u4F3C\u5EA6\u7684\u6700\u5C0F\u9608\u503C (0.0 \u5230 1.0)\uFF0C\u4F4E\u4E8E\u6B64\u9608\u503C\u7684\u7B14\u8BB0\u5BF9\u5C06\u4E0D\u88AB\u89C6\u4E3A\u5019\u9009\u94FE\u63A5\u3002").addText(
+    new import_obsidian8.Setting(containerEl).setClass("jina-settings-block").setName("Jina \u76F8\u4F3C\u5EA6\u9608\u503C").setDesc("Jina \u5D4C\u5165\u5411\u91CF\u4E4B\u95F4\u8BA1\u7B97\u4F59\u5F26\u76F8\u4F3C\u5EA6\u7684\u6700\u5C0F\u9608\u503C (0.0 \u5230 1.0)\uFF0C\u4F4E\u4E8E\u6B64\u9608\u503C\u7684\u7B14\u8BB0\u5BF9\u5C06\u4E0D\u88AB\u89C6\u4E3A\u5019\u9009\u94FE\u63A5\u3002").addText(
       (text) => text.setValue(this.plugin.settings.similarityThreshold.toString()).onChange(async (value) => {
         const num = parseFloat(value);
         if (!isNaN(num) && num >= 0 && num <= 1) {
           this.plugin.settings.similarityThreshold = num;
         } else {
-          new import_obsidian7.Notice("\u76F8\u4F3C\u5EA6\u9608\u503C\u5FC5\u987B\u662F 0.0 \u5230 1.0 \u4E4B\u95F4\u7684\u6570\u5B57\u3002");
+          new import_obsidian8.Notice("\u76F8\u4F3C\u5EA6\u9608\u503C\u5FC5\u987B\u662F 0.0 \u5230 1.0 \u4E4B\u95F4\u7684\u6570\u5B57\u3002");
         }
         await this.plugin.saveSettings();
       })
     );
     containerEl.createEl("div", { cls: "jina-settings-section", text: "" }).innerHTML = '<div class="jina-settings-section-title">\u9AD8\u7EA7\u6A21\u578B\u4E0E\u5185\u5BB9\u53C2\u6570</div>';
-    new import_obsidian7.Setting(containerEl).setClass("jina-settings-block").setName("Jina \u6A21\u578B\u540D\u79F0").setDesc("\u7528\u4E8E\u751F\u6210\u5D4C\u5165\u7684 Jina \u6A21\u578B\u540D\u79F0\u3002").addText(
-      (text) => text.setPlaceholder(String(DEFAULT_SETTINGS.jinaModelName)).setValue(this.plugin.settings.jinaModelName).onChange(async (value) => {
-        this.plugin.settings.jinaModelName = value.trim() || DEFAULT_SETTINGS.jinaModelName;
-        await this.plugin.saveSettings();
-      })
-    );
-    new import_obsidian7.Setting(containerEl).setClass("jina-settings-block").setName("Jina \u5D4C\u5165\u6700\u5927\u5B57\u7B26\u6570").setDesc("\u4F20\u9012\u7ED9 Jina API \u8FDB\u884C\u5D4C\u5165\u7684\u6587\u672C\u5185\u5BB9\u7684\u6700\u5927\u5B57\u7B26\u6570\u3002").addText(
-      (text) => text.setPlaceholder(String(DEFAULT_SETTINGS.maxCharsForJina)).setValue(this.plugin.settings.maxCharsForJina.toString()).onChange(async (value) => {
-        this.plugin.settings.maxCharsForJina = parseInt(value) || DEFAULT_SETTINGS.maxCharsForJina;
-        await this.plugin.saveSettings();
-      })
-    );
-    new import_obsidian7.Setting(containerEl).setClass("jina-settings-block").setName("AI \u8BC4\u5206\u5185\u5BB9\u6700\u5927\u957F\u5EA6").setDesc("\u4F20\u9012\u7ED9 AI API \u8FDB\u884C\u8BC4\u5206\u7684\u6BCF\u6761\u7B14\u8BB0\u5185\u5BB9\u7684\u6700\u5927\u5B57\u7B26\u6570\u3002").addText(
+    new import_obsidian8.Setting(containerEl).setClass("jina-settings-block").setName("AI \u8BC4\u5206\u5185\u5BB9\u6700\u5927\u957F\u5EA6").setDesc("\u4F20\u9012\u7ED9 AI API \u8FDB\u884C\u8BC4\u5206\u7684\u6BCF\u6761\u7B14\u8BB0\u5185\u5BB9\u7684\u6700\u5927\u5B57\u7B26\u6570\u3002").addText(
       (text) => text.setPlaceholder(String(DEFAULT_SETTINGS.maxContentLengthForAI)).setValue(this.plugin.settings.maxContentLengthForAI.toString()).onChange(async (value) => {
         this.plugin.settings.maxContentLengthForAI = parseInt(value) || DEFAULT_SETTINGS.maxContentLengthForAI;
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian7.Setting(containerEl).setClass("jina-settings-block").setName("\u6BCF\u6E90\u7B14\u8BB0\u9001\u4EA4 AI \u8BC4\u5206\u7684\u6700\u5927\u5019\u9009\u94FE\u63A5\u6570").setDesc("\u5BF9\u4E8E\u6BCF\u4E2A\u6E90\u7B14\u8BB0\uFF0C\u6309 Jina \u76F8\u4F3C\u5EA6\u4ECE\u9AD8\u5230\u4F4E\u6392\u5E8F\u540E\uFF0C\u6700\u591A\u9009\u62E9\u591A\u5C11\u4E2A\u5019\u9009\u94FE\u63A5\u53D1\u9001\u7ED9 AI\u8FDB\u884C\u8BC4\u5206\u3002").addText(
+    new import_obsidian8.Setting(containerEl).setClass("jina-settings-block").setName("\u6BCF\u6E90\u7B14\u8BB0\u9001\u4EA4 AI \u8BC4\u5206\u7684\u6700\u5927\u5019\u9009\u94FE\u63A5\u6570").setDesc("\u5BF9\u4E8E\u6BCF\u4E2A\u6E90\u7B14\u8BB0\uFF0C\u6309 Jina \u76F8\u4F3C\u5EA6\u4ECE\u9AD8\u5230\u4F4E\u6392\u5E8F\u540E\uFF0C\u6700\u591A\u9009\u62E9\u591A\u5C11\u4E2A\u5019\u9009\u94FE\u63A5\u53D1\u9001\u7ED9 AI\u8FDB\u884C\u8BC4\u5206\u3002").addText(
       (text) => text.setPlaceholder(String(DEFAULT_SETTINGS.maxCandidatesPerSourceForAIScoring)).setValue(this.plugin.settings.maxCandidatesPerSourceForAIScoring.toString()).onChange(async (value) => {
         this.plugin.settings.maxCandidatesPerSourceForAIScoring = parseInt(value) || DEFAULT_SETTINGS.maxCandidatesPerSourceForAIScoring;
         await this.plugin.saveSettings();
       })
     );
     containerEl.createEl("div", { cls: "jina-settings-section", text: "" }).innerHTML = '<div class="jina-settings-section-title">AI \u6279\u91CF\u5904\u7406\u53C2\u6570</div>';
-    new import_obsidian7.Setting(containerEl).setClass("jina-settings-block").setName("\u6BCF\u6B21 API \u8BF7\u6C42\u7684\u6700\u5927\u7B14\u8BB0\u5BF9\u6570").setDesc("\u6BCF\u6B21\u5411 AI \u670D\u52A1\u53D1\u9001\u8BF7\u6C42\u65F6\uFF0C\u6700\u591A\u5305\u542B\u7684\u7B14\u8BB0\u5BF9\u6570\u91CF\u3002\u589E\u52A0\u53EF\u51CF\u5C11 API \u8C03\u7528\u6B21\u6570\uFF0C\u4F46\u53EF\u80FD\u589E\u52A0\u5904\u7406\u65F6\u95F4\u3002").addText(
+    new import_obsidian8.Setting(containerEl).setClass("jina-settings-block").setName("\u6BCF\u6B21 API \u8BF7\u6C42\u7684\u6700\u5927\u7B14\u8BB0\u5BF9\u6570").setDesc("\u6BCF\u6B21\u5411 AI \u670D\u52A1\u53D1\u9001\u8BF7\u6C42\u65F6\uFF0C\u6700\u591A\u5305\u542B\u7684\u7B14\u8BB0\u5BF9\u6570\u91CF\u3002\u589E\u52A0\u53EF\u51CF\u5C11 API \u8C03\u7528\u6B21\u6570\uFF0C\u4F46\u53EF\u80FD\u589E\u52A0\u5904\u7406\u65F6\u95F4\u3002").addText(
       (text) => text.setPlaceholder(String(DEFAULT_SETTINGS.maxPairsPerRequest)).setValue(this.plugin.settings.maxPairsPerRequest.toString()).onChange(async (value) => {
         this.plugin.settings.maxPairsPerRequest = parseInt(value) || DEFAULT_SETTINGS.maxPairsPerRequest;
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian7.Setting(containerEl).setClass("jina-settings-block").setName("\u6BCF\u4E2A\u7B14\u8BB0\u5728 AI \u8BC4\u5206\u65F6\u7684\u6700\u5927\u5B57\u7B26\u6570").setDesc("\u9650\u5236\u53D1\u9001\u7ED9 AI \u8FDB\u884C\u8BC4\u5206\u7684\u6BCF\u4E2A\u7B14\u8BB0\u7684\u6700\u5927\u5B57\u7B26\u6570\uFF0C\u4EE5\u907F\u514D\u8D85\u51FA API \u9650\u5236\u3002").addText(
+    new import_obsidian8.Setting(containerEl).setClass("jina-settings-block").setName("\u6BCF\u4E2A\u7B14\u8BB0\u5728 AI \u8BC4\u5206\u65F6\u7684\u6700\u5927\u5B57\u7B26\u6570").setDesc("\u9650\u5236\u53D1\u9001\u7ED9 AI \u8FDB\u884C\u8BC4\u5206\u7684\u6BCF\u4E2A\u7B14\u8BB0\u7684\u6700\u5927\u5B57\u7B26\u6570\uFF0C\u4EE5\u907F\u514D\u8D85\u51FA API \u9650\u5236\u3002").addText(
       (text) => text.setPlaceholder(String(DEFAULT_SETTINGS.maxCharsPerNote)).setValue(this.plugin.settings.maxCharsPerNote.toString()).onChange(async (value) => {
         this.plugin.settings.maxCharsPerNote = parseInt(value) || DEFAULT_SETTINGS.maxCharsPerNote;
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian7.Setting(containerEl).setClass("jina-settings-block").setName("\u6BCF\u6B21 API \u8BF7\u6C42\u7684\u6700\u5927\u603B\u5B57\u7B26\u6570").setDesc("\u6BCF\u6B21 API \u6279\u91CF\u8BF7\u6C42\u7684\u6700\u5927\u603B\u5B57\u7B26\u6570\u9650\u5236\uFF0C\u4EE5\u907F\u514D\u8D85\u51FA API \u7684\u8BF7\u6C42\u5927\u5C0F\u9650\u5236\u3002").addText(
+    new import_obsidian8.Setting(containerEl).setClass("jina-settings-block").setName("\u6BCF\u6B21 API \u8BF7\u6C42\u7684\u6700\u5927\u603B\u5B57\u7B26\u6570").setDesc("\u6BCF\u6B21 API \u6279\u91CF\u8BF7\u6C42\u7684\u6700\u5927\u603B\u5B57\u7B26\u6570\u9650\u5236\uFF0C\u4EE5\u907F\u514D\u8D85\u51FA API \u7684\u8BF7\u6C42\u5927\u5C0F\u9650\u5236\u3002").addText(
       (text) => text.setPlaceholder(String(DEFAULT_SETTINGS.maxTotalCharsPerRequest)).setValue(this.plugin.settings.maxTotalCharsPerRequest.toString()).onChange(async (value) => {
         this.plugin.settings.maxTotalCharsPerRequest = parseInt(value) || DEFAULT_SETTINGS.maxTotalCharsPerRequest;
         await this.plugin.saveSettings();
       })
     );
     containerEl.createEl("div", { cls: "jina-settings-section", text: "" }).innerHTML = '<div class="jina-settings-section-title">AI \u8BC4\u5206\u63D0\u793A\u8BCD\u8BBE\u7F6E</div>';
-    new import_obsidian7.Setting(containerEl).setClass("jina-settings-block").setName("\u4F7F\u7528\u81EA\u5B9A\u4E49\u8BC4\u5206\u63D0\u793A\u8BCD").setDesc("\u542F\u7528\u540E\u5C06\u4F7F\u7528\u4E0B\u65B9\u81EA\u5B9A\u4E49\u7684\u8BC4\u5206\u63D0\u793A\u8BCD\uFF0C\u800C\u975E\u9ED8\u8BA4\u63D0\u793A\u8BCD\u3002").addToggle(
+    new import_obsidian8.Setting(containerEl).setClass("jina-settings-block").setName("\u4F7F\u7528\u81EA\u5B9A\u4E49\u8BC4\u5206\u63D0\u793A\u8BCD").setDesc("\u542F\u7528\u540E\u5C06\u4F7F\u7528\u4E0B\u65B9\u81EA\u5B9A\u4E49\u7684\u8BC4\u5206\u63D0\u793A\u8BCD\uFF0C\u800C\u975E\u9ED8\u8BA4\u63D0\u793A\u8BCD\u3002").addToggle(
       (toggle) => toggle.setValue(this.plugin.settings.useCustomScoringPrompt).onChange(async (value) => {
         this.plugin.settings.useCustomScoringPrompt = value;
         await this.plugin.saveSettings();
@@ -1248,7 +1243,7 @@ var JinaLinkerSettingTab = class extends import_obsidian7.PluginSettingTab {
       textarea.value = DEFAULT_SCORING_PROMPT;
       this.plugin.settings.customScoringPrompt = DEFAULT_SCORING_PROMPT;
       await this.plugin.saveSettings();
-      new import_obsidian7.Notice("\u5DF2\u6062\u590D\u9ED8\u8BA4\u8BC4\u5206\u63D0\u793A\u8BCD");
+      new import_obsidian8.Notice("\u5DF2\u6062\u590D\u9ED8\u8BA4\u8BC4\u5206\u63D0\u793A\u8BCD");
     });
     if (!this.plugin.settings.useCustomScoringPrompt) {
       textarea.disabled = true;
@@ -1257,54 +1252,101 @@ var JinaLinkerSettingTab = class extends import_obsidian7.PluginSettingTab {
       resetButton.classList.add("jina-disabled");
     }
     containerEl.createEl("div", { cls: "jina-settings-section", text: "" }).innerHTML = '<div class="jina-settings-section-title">\u94FE\u63A5\u63D2\u5165\u8BBE\u7F6E</div>';
-    new import_obsidian7.Setting(containerEl).setClass("jina-settings-block").setName("\u94FE\u63A5\u63D2\u5165\u7684\u6700\u5C0F AI \u5206\u6570").setDesc("\u53EA\u6709 AI \u8BC4\u5206\u5927\u4E8E\u6216\u7B49\u4E8E\u6B64\u503C\u7684\u5019\u9009\u94FE\u63A5\u624D\u4F1A\u88AB\u63D2\u5165\u5230\u7B14\u8BB0\u4E2D\u3002").addText(
+    new import_obsidian8.Setting(containerEl).setClass("jina-settings-block").setName("\u94FE\u63A5\u63D2\u5165\u7684\u6700\u5C0F AI \u5206\u6570").setDesc("\u53EA\u6709 AI \u8BC4\u5206\u5927\u4E8E\u6216\u7B49\u4E8E\u6B64\u503C\u7684\u5019\u9009\u94FE\u63A5\u624D\u4F1A\u88AB\u63D2\u5165\u5230\u7B14\u8BB0\u4E2D\u3002").addText(
       (text) => text.setPlaceholder(String(DEFAULT_SETTINGS.minAiScoreForLinkInsertion)).setValue(this.plugin.settings.minAiScoreForLinkInsertion.toString()).onChange(async (value) => {
         this.plugin.settings.minAiScoreForLinkInsertion = parseInt(value) || DEFAULT_SETTINGS.minAiScoreForLinkInsertion;
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian7.Setting(containerEl).setClass("jina-settings-block").setName("\u6BCF\u4E2A\u7B14\u8BB0\u6700\u591A\u63D2\u5165\u7684\u94FE\u63A5\u6570").setDesc("\u5BF9\u4E8E\u6BCF\u4E2A\u7B14\u8BB0\uFF0C\u6700\u591A\u63D2\u5165\u591A\u5C11\u6761\u7B26\u5408\u6761\u4EF6\u7684\u5EFA\u8BAE\u94FE\u63A5\u3002").addText(
+    new import_obsidian8.Setting(containerEl).setClass("jina-settings-block").setName("\u6BCF\u4E2A\u7B14\u8BB0\u6700\u591A\u63D2\u5165\u7684\u94FE\u63A5\u6570").setDesc("\u5BF9\u4E8E\u6BCF\u4E2A\u7B14\u8BB0\uFF0C\u6700\u591A\u63D2\u5165\u591A\u5C11\u6761\u7B26\u5408\u6761\u4EF6\u7684\u5EFA\u8BAE\u94FE\u63A5\u3002").addText(
       (text) => text.setPlaceholder(String(DEFAULT_SETTINGS.maxLinksToInsertPerNote)).setValue(this.plugin.settings.maxLinksToInsertPerNote.toString()).onChange(async (value) => {
         this.plugin.settings.maxLinksToInsertPerNote = parseInt(value) || DEFAULT_SETTINGS.maxLinksToInsertPerNote;
         await this.plugin.saveSettings();
       })
     );
     containerEl.createEl("div", { cls: "jina-settings-section", text: "" }).innerHTML = '<div class="jina-settings-section-title">\u6027\u80FD\u548C\u8C03\u8BD5</div>';
-    new import_obsidian7.Setting(containerEl).setClass("jina-settings-block").setName("\u6E05\u7406\u6587\u4EF6\u7F13\u5B58").setDesc("\u6E05\u7406\u63D2\u4EF6\u7684\u6587\u4EF6\u5185\u5BB9\u7F13\u5B58\u4EE5\u91CA\u653E\u5185\u5B58\u3002").addButton((button) => button.setButtonText("\u6E05\u7406\u7F13\u5B58").onClick(() => {
+    new import_obsidian8.Setting(containerEl).setClass("jina-settings-block").setName("\u6E05\u7406\u6587\u4EF6\u7F13\u5B58").setDesc("\u6E05\u7406\u63D2\u4EF6\u7684\u6587\u4EF6\u5185\u5BB9\u7F13\u5B58\u4EE5\u91CA\u653E\u5185\u5B58\u3002").addButton((button) => button.setButtonText("\u6E05\u7406\u7F13\u5B58").onClick(() => {
       this.plugin.clearCache();
     }));
-    new import_obsidian7.Setting(containerEl).setClass("jina-settings-block").setName("\u663E\u793A\u6027\u80FD\u7EDF\u8BA1").setDesc("\u5728\u63A7\u5236\u53F0\u663E\u793A\u63D2\u4EF6\u7684\u6027\u80FD\u7EDF\u8BA1\u4FE1\u606F\u3002").addButton((button) => button.setButtonText("\u663E\u793A\u7EDF\u8BA1").onClick(() => {
+    new import_obsidian8.Setting(containerEl).setClass("jina-settings-block").setName("\u663E\u793A\u6027\u80FD\u7EDF\u8BA1").setDesc("\u5728\u63A7\u5236\u53F0\u663E\u793A\u63D2\u4EF6\u7684\u6027\u80FD\u7EDF\u8BA1\u4FE1\u606F\u3002").addButton((button) => button.setButtonText("\u663E\u793A\u7EDF\u8BA1").onClick(() => {
       const metrics = this.plugin.performanceMonitor.getMetricsSummary();
       console.log("Jina AI Linker \u6027\u80FD\u7EDF\u8BA1:", metrics);
-      new import_obsidian7.Notice("\u6027\u80FD\u7EDF\u8BA1\u5DF2\u8F93\u51FA\u5230\u63A7\u5236\u53F0", 3e3);
+      new import_obsidian8.Notice("\u6027\u80FD\u7EDF\u8BA1\u5DF2\u8F93\u51FA\u5230\u63A7\u5236\u53F0", 3e3);
     }));
-    new import_obsidian7.Setting(containerEl).setClass("jina-settings-block").setName("\u53D6\u6D88\u5F53\u524D\u64CD\u4F5C").setDesc("\u53D6\u6D88\u6B63\u5728\u8FDB\u884C\u7684Python\u811A\u672C\u6216\u94FE\u63A5\u63D2\u5165\u64CD\u4F5C\u3002").addButton((button) => button.setButtonText("\u53D6\u6D88\u64CD\u4F5C").setClass("mod-warning").onClick(() => {
+    new import_obsidian8.Setting(containerEl).setClass("jina-settings-block").setName("\u53D6\u6D88\u5F53\u524D\u64CD\u4F5C").setDesc("\u53D6\u6D88\u6B63\u5728\u8FDB\u884C\u7684Python\u811A\u672C\u6216\u94FE\u63A5\u63D2\u5165\u64CD\u4F5C\u3002").addButton((button) => button.setButtonText("\u53D6\u6D88\u64CD\u4F5C").setClass("mod-warning").onClick(() => {
       this.plugin.cancelCurrentOperation();
     }));
+    containerEl.createEl("div", { cls: "jina-settings-section", text: "" }).innerHTML = '<div class="jina-settings-section-title">AI \u6807\u7B7E\u751F\u6210</div>';
+    new import_obsidian8.Setting(containerEl).setClass("jina-settings-block").setName("\u6BCF\u7BC7\u7B14\u8BB0\u6700\u591A\u6807\u7B7E\u6570").addText(
+      (t) => t.setPlaceholder("5").setValue(String(this.plugin.settings.maxTagsPerNote)).onChange(async (v) => {
+        this.plugin.settings.maxTagsPerNote = parseInt(v) || 5;
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian8.Setting(containerEl).setClass("jina-settings-block").setName("\u4F7F\u7528\u81EA\u5B9A\u4E49\u6807\u7B7E\u63D0\u793A\u8BCD").setDesc("\u542F\u7528\u540E\u5C06\u4F7F\u7528\u4E0B\u65B9\u81EA\u5B9A\u4E49\u7684\u6807\u7B7E\u63D0\u793A\u8BCD\uFF0C\u800C\u975E\u9ED8\u8BA4\u63D0\u793A\u8BCD\u3002").addToggle((tg) => tg.setValue(this.plugin.settings.useCustomTagPrompt).onChange(async (v) => {
+      this.plugin.settings.useCustomTagPrompt = v;
+      await this.plugin.saveSettings();
+      this.display();
+    }));
+    const tagPromptContainer = containerEl.createEl("div", { cls: "jina-settings-block" });
+    tagPromptContainer.createEl("div", {
+      text: "\u81EA\u5B9A\u4E49\u6807\u7B7E\u63D0\u793A\u8BCD",
+      cls: "setting-item-name"
+    });
+    tagPromptContainer.createEl("div", {
+      text: "\u81EA\u5B9A\u4E49 AI \u751F\u6210\u6807\u7B7E\u7684\u63D0\u793A\u8BCD\uFF0C\u5C06\u4F5C\u4E3A\u6307\u4EE4\u53D1\u9001\u7ED9 AI \u6A21\u578B\u4EE5\u6307\u5BFC\u6807\u7B7E\u751F\u6210\u3002",
+      cls: "setting-item-description"
+    });
+    const tagTextareaContainer = tagPromptContainer.createEl("div", { cls: "jina-textarea-container" });
+    const tagTextarea = tagTextareaContainer.createEl("textarea", {
+      cls: "jina-textarea",
+      attr: {
+        rows: "10",
+        placeholder: "\u5728\u6B64\u8F93\u5165\u81EA\u5B9A\u4E49\u6807\u7B7E\u63D0\u793A\u8BCD..."
+      }
+    });
+    tagTextarea.value = this.plugin.settings.customTagPrompt || DEFAULT_TAG_PROMPT;
+    tagTextarea.addEventListener("change", async () => {
+      this.plugin.settings.customTagPrompt = tagTextarea.value;
+      await this.plugin.saveSettings();
+    });
+    const tagBtnContainer = tagPromptContainer.createEl("div", { cls: "jina-button-container" });
+    const tagResetBtn = tagBtnContainer.createEl("button", {
+      text: "\u6062\u590D\u9ED8\u8BA4\u63D0\u793A\u8BCD",
+      cls: "mod-warning"
+    });
+    tagResetBtn.addEventListener("click", async () => {
+      tagTextarea.value = DEFAULT_TAG_PROMPT;
+      this.plugin.settings.customTagPrompt = DEFAULT_TAG_PROMPT;
+      await this.plugin.saveSettings();
+      new import_obsidian8.Notice("\u5DF2\u6062\u590D\u9ED8\u8BA4\u6807\u7B7E\u63D0\u793A\u8BCD");
+    });
+    if (!this.plugin.settings.useCustomTagPrompt) {
+      tagTextarea.disabled = true;
+      tagResetBtn.disabled = true;
+      tagTextarea.classList.add("jina-disabled");
+      tagResetBtn.classList.add("jina-disabled");
+    }
     containerEl.createEl("div", { cls: "jina-settings-section", text: "" }).innerHTML = '<div style="margin-top: 2em; color: var(--text-muted); font-size: 0.9em;">Jina AI Linker v' + this.plugin.manifest.version + "</div>";
     this.addCustomStyles();
   }
   displayAIProviderSettings(containerEl) {
     const selectedProvider = this.plugin.settings.selectedAIProvider;
     const aiConfig = this.plugin.settings.aiModels[selectedProvider];
-    new import_obsidian7.Setting(containerEl).setClass("jina-settings-block").setName(`\u542F\u7528 ${this.getProviderDisplayName(selectedProvider)}`).setDesc(`\u662F\u5426\u542F\u7528 ${this.getProviderDisplayName(selectedProvider)} \u8FDB\u884C\u667A\u80FD\u8BC4\u5206\u3002`).addToggle((toggle) => toggle.setValue(aiConfig.enabled).onChange(async (value) => {
-      this.plugin.settings.aiModels[selectedProvider].enabled = value;
-      await this.plugin.saveSettings();
-      this.display();
-    }));
-    if (aiConfig.enabled) {
-      new import_obsidian7.Setting(containerEl).setClass("jina-settings-block").setName("API URL").setDesc(`${this.getProviderDisplayName(selectedProvider)} \u7684 API \u7AEF\u70B9\u5730\u5740\u3002`).addText((text) => text.setPlaceholder(this.getDefaultApiUrl(selectedProvider)).setValue(aiConfig.apiUrl).onChange(async (value) => {
+    aiConfig.enabled = true;
+    {
+      new import_obsidian8.Setting(containerEl).setClass("jina-settings-block").setName("API URL").setDesc(`${this.getProviderDisplayName(selectedProvider)} \u7684 API \u7AEF\u70B9\u5730\u5740\u3002`).addText((text) => text.setPlaceholder(this.getDefaultApiUrl(selectedProvider)).setValue(aiConfig.apiUrl).onChange(async (value) => {
         this.plugin.settings.aiModels[selectedProvider].apiUrl = value.trim() || this.getDefaultApiUrl(selectedProvider);
         await this.plugin.saveSettings();
       }));
-      new import_obsidian7.Setting(containerEl).setClass("jina-settings-block").setName("API \u5BC6\u94A5").setDesc(`\u60A8\u7684 ${this.getProviderDisplayName(selectedProvider)} API \u5BC6\u94A5\u3002`).addText((text) => {
+      new import_obsidian8.Setting(containerEl).setClass("jina-settings-block").setName("API \u5BC6\u94A5").setDesc(`\u60A8\u7684 ${this.getProviderDisplayName(selectedProvider)} API \u5BC6\u94A5\u3002`).addText((text) => {
         text.inputEl.type = "password";
         text.setPlaceholder(`\u8F93\u5165 ${this.getProviderDisplayName(selectedProvider)} API \u5BC6\u94A5`).setValue(aiConfig.apiKey).onChange(async (value) => {
           this.plugin.settings.aiModels[selectedProvider].apiKey = value;
           await this.plugin.saveSettings();
         });
       });
-      new import_obsidian7.Setting(containerEl).setClass("jina-settings-block").setName("\u6A21\u578B\u540D\u79F0").setDesc(`${this.getProviderDisplayName(selectedProvider)} \u7684\u6A21\u578B\u540D\u79F0\u3002`).addText((text) => text.setPlaceholder(this.getDefaultModelName(selectedProvider)).setValue(aiConfig.modelName).onChange(async (value) => {
+      new import_obsidian8.Setting(containerEl).setClass("jina-settings-block").setName("\u6A21\u578B\u540D\u79F0").setDesc(`${this.getProviderDisplayName(selectedProvider)} \u7684\u6A21\u578B\u540D\u79F0\u3002`).addText((text) => text.setPlaceholder(this.getDefaultModelName(selectedProvider)).setValue(aiConfig.modelName).onChange(async (value) => {
         this.plugin.settings.aiModels[selectedProvider].modelName = value.trim() || this.getDefaultModelName(selectedProvider);
         await this.plugin.saveSettings();
       }));
@@ -1348,13 +1390,13 @@ var JinaLinkerSettingTab = class extends import_obsidian7.PluginSettingTab {
   getModelSuggestions(provider) {
     switch (provider) {
       case "deepseek":
-        return ["deepseek-chat", "deepseek-coder"];
+        return ["deepseek-chat", "deepseek-reasoner"];
       case "openai":
-        return ["gpt-4-turbo-preview", "gpt-4", "gpt-3.5-turbo"];
+        return ["gpt-o3-mini", "gpt-4o"];
       case "claude":
-        return ["claude-3-opus-20240229", "claude-3-sonnet-20240229", "claude-3-haiku-20240307"];
+        return ["claude-4-opus", "claude-3.7-sonnet"];
       case "gemini":
-        return ["gemini-pro", "gemini-1.5-pro"];
+        return ["gemini-20.5 flash", "gemini-2.5-pro"];
       default:
         return [];
     }
@@ -1428,8 +1470,8 @@ var JinaLinkerSettingTab = class extends import_obsidian7.PluginSettingTab {
 };
 
 // ui/modals/run-plugin-modal.ts
-var import_obsidian8 = require("obsidian");
-var RunPluginModal = class extends import_obsidian8.Modal {
+var import_obsidian9 = require("obsidian");
+var RunPluginModal = class extends import_obsidian9.Modal {
   constructor(app, plugin, callbackFn) {
     var _a;
     super(app);
@@ -1445,17 +1487,17 @@ var RunPluginModal = class extends import_obsidian8.Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.createEl("h2", { text: "Jina AI Linker \u8FD0\u884C\u9009\u9879" });
-    new import_obsidian8.Setting(contentEl).setName("\u626B\u63CF\u76EE\u6807\u6587\u4EF6\u5939").setDesc('\u8F93\u5165\u8981\u5904\u7406\u7684\u6587\u4EF6\u5939\u8DEF\u5F84\uFF0C\u591A\u4E2A\u6587\u4EF6\u5939\u7528\u9017\u53F7\u5206\u9694\u3002\u4F7F\u7528 "/" \u8868\u793A\u6574\u4E2A\u4ED3\u5E93\u3002').addText(
+    new import_obsidian9.Setting(contentEl).setName("\u626B\u63CF\u76EE\u6807\u6587\u4EF6\u5939").setDesc('\u8F93\u5165\u8981\u5904\u7406\u7684\u6587\u4EF6\u5939\u8DEF\u5F84\uFF0C\u591A\u4E2A\u6587\u4EF6\u5939\u7528\u9017\u53F7\u5206\u9694\u3002\u4F7F\u7528 "/" \u8868\u793A\u6574\u4E2A\u4ED3\u5E93\u3002').addText(
       (text) => text.setPlaceholder("\u4F8B\u5982\uFF1A/, \u6587\u4EF6\u59391, \u6587\u4EF6\u59392/\u5B50\u6587\u4EF6\u5939").setValue(this.scanPath).onChange(async (value) => {
         this.scanPath = value.trim();
       })
     );
-    new import_obsidian8.Setting(contentEl).setName("AI \u8BC4\u5206\u6A21\u5F0F").setDesc("\u63A7\u5236\u5982\u4F55\u5904\u7406\u5DF2\u6709\u8BC4\u5206\u7684\u6587\u6863\u5BF9\u3002").addDropdown(
+    new import_obsidian9.Setting(contentEl).setName("AI \u8BC4\u5206\u6A21\u5F0F").setDesc("\u63A7\u5236\u5982\u4F55\u5904\u7406\u5DF2\u6709\u8BC4\u5206\u7684\u6587\u6863\u5BF9\u3002").addDropdown(
       (dropdown) => dropdown.addOption("smart", "\u667A\u80FD\u6A21\u5F0F\uFF08\u4EC5\u8BC4\u5206\u65B0\u589E\u548C\u53D8\u66F4\uFF09").addOption("force", "\u5F3A\u5236\u6A21\u5F0F\uFF08\u91CD\u65B0\u8BC4\u5206\u6240\u6709\uFF09").addOption("skip", "\u8DF3\u8FC7\u6A21\u5F0F\uFF08\u4E0D\u8FDB\u884C\u8BC4\u5206\uFF09").setValue(this.scoringMode).onChange((value) => {
         this.scoringMode = value;
       })
     );
-    new import_obsidian8.Setting(contentEl).addButton((btn) => btn.setButtonText("\u53D6\u6D88").onClick(() => {
+    new import_obsidian9.Setting(contentEl).addButton((btn) => btn.setButtonText("\u53D6\u6D88").onClick(() => {
       this.close();
     })).addButton((btn) => btn.setButtonText("\u8FD0\u884C").setCta().onClick(() => {
       if (!this.scanPath) {
@@ -1478,8 +1520,8 @@ var RunPluginModal = class extends import_obsidian8.Modal {
 };
 
 // ui/modals/progress-modal.ts
-var import_obsidian9 = require("obsidian");
-var ProgressModal = class extends import_obsidian9.Modal {
+var import_obsidian10 = require("obsidian");
+var ProgressModal = class extends import_obsidian10.Modal {
   constructor(app, title, onCancel) {
     super(app);
     this.onCancel = onCancel;
@@ -1587,12 +1629,12 @@ var ProgressModal = class extends import_obsidian9.Modal {
   }
 };
 
-// ui/modals/calculate-hash-modal.ts
-var import_obsidian11 = require("obsidian");
+// ui/modals/add-hash-boundary-modal.ts
+var import_obsidian12 = require("obsidian");
 
 // ui/modals/path-suggest-modal.ts
-var import_obsidian10 = require("obsidian");
-var PathSuggestModal = class extends import_obsidian10.FuzzySuggestModal {
+var import_obsidian11 = require("obsidian");
+var PathSuggestModal = class extends import_obsidian11.FuzzySuggestModal {
   constructor(app, paths, inputText, callback) {
     super(app);
     this.paths = paths;
@@ -1607,11 +1649,11 @@ var PathSuggestModal = class extends import_obsidian10.FuzzySuggestModal {
   getItems() {
     return this.paths;
   }
-  getItemText(path5) {
-    return path5;
+  getItemText(path4) {
+    return path4;
   }
-  onChooseItem(path5, evt) {
-    this.callback(path5);
+  onChooseItem(path4, evt) {
+    this.callback(path4);
   }
   renderSuggestion(item, el) {
     const match = item.item;
@@ -1630,126 +1672,8 @@ var PathSuggestModal = class extends import_obsidian10.FuzzySuggestModal {
   }
 };
 
-// ui/modals/calculate-hash-modal.ts
-var CalculateHashModal = class extends import_obsidian11.Modal {
-  constructor(app, plugin, onSubmit) {
-    super(app);
-    this.filePath = "";
-    // 用于存储自动完成的文件和文件夹路径
-    this.allPaths = [];
-    this.plugin = plugin;
-    this.onSubmit = onSubmit;
-    this.loadAllPaths();
-  }
-  // 加载所有Markdown文件路径
-  loadAllPaths() {
-    this.allPaths = [];
-    const allFiles = this.app.vault.getAllLoadedFiles();
-    for (const file of allFiles) {
-      if (file instanceof import_obsidian11.TFile && file.extension === "md") {
-        this.allPaths.push(file.path);
-      }
-    }
-    this.allPaths.sort();
-  }
-  onOpen() {
-    const { contentEl } = this;
-    contentEl.empty();
-    contentEl.createEl("h2", { text: "\u8BA1\u7B97\u7B14\u8BB0\u5185\u5BB9\u54C8\u5E0C\u503C" });
-    const settingDiv = contentEl.createDiv();
-    settingDiv.addClass("jina-setting");
-    const descEl = settingDiv.createDiv();
-    descEl.addClass("setting-item-description");
-    descEl.setText('\u8BF7\u8F93\u5165\u8981\u8BA1\u7B97\u54C8\u5E0C\u503C\u7684\u7B14\u8BB0\u7684\u4ED3\u5E93\u76F8\u5BF9\u8DEF\u5F84\u3002\u8BF7\u4F7F\u7528\u6B63\u659C\u6760 "/" \u4F5C\u4E3A\u8DEF\u5F84\u5206\u9694\u7B26 (\u4F8B\u5982\uFF1A\u6587\u4EF6\u5939/\u7B14\u8BB0.md)\u3002');
-    const inputContainer = settingDiv.createDiv();
-    inputContainer.addClass("jina-path-input-container");
-    this.inputEl = document.createElement("input");
-    this.inputEl.addClass("jina-path-input");
-    this.inputEl.setAttr("placeholder", "\u4F8B\u5982\uFF1ANotes/MyNote.md");
-    this.inputEl.value = this.filePath;
-    inputContainer.appendChild(this.inputEl);
-    const browseButton = document.createElement("button");
-    browseButton.setText("\u6D4F\u89C8...");
-    browseButton.addClass("jina-browse-button");
-    inputContainer.appendChild(browseButton);
-    this.inputEl.addEventListener("input", () => {
-      this.filePath = this.inputEl.value;
-    });
-    browseButton.addEventListener("click", () => {
-      const currentPath = this.inputEl.value.trim();
-      this.openPathSuggestModal(currentPath, (selectedPath) => {
-        if (selectedPath) {
-          this.inputEl.value = selectedPath;
-          this.filePath = selectedPath;
-          this.inputEl.focus();
-        }
-      });
-    });
-    const buttonContainer = contentEl.createDiv();
-    buttonContainer.addClass("jina-button-container");
-    const submitButton = buttonContainer.createEl("button");
-    submitButton.setText("\u8BA1\u7B97\u54C8\u5E0C");
-    submitButton.addClass("mod-cta");
-    submitButton.addEventListener("click", () => {
-      if (!this.filePath) {
-        new import_obsidian11.Notice("\u8BF7\u8F93\u5165\u6587\u4EF6\u8DEF\u5F84\u3002");
-        return;
-      }
-      this.close();
-      this.onSubmit(this.filePath);
-    });
-    this.addStyles(contentEl);
-  }
-  // 打开路径建议弹窗
-  openPathSuggestModal(currentPath, callback) {
-    const modal = new PathSuggestModal(this.app, this.allPaths, currentPath, callback);
-    modal.open();
-  }
-  // 添加样式
-  addStyles(contentEl) {
-    const styleEl = contentEl.createEl("style");
-    styleEl.textContent = `
-            .jina-setting {
-                padding: 12px 0;
-            }
-            .jina-path-input-container {
-                display: flex;
-                margin-top: 8px;
-                gap: 8px;
-                align-items: center;
-            }
-            .jina-path-input {
-                flex-grow: 1;
-                padding: 8px;
-                border-radius: 4px;
-                font-size: 14px;
-                background-color: var(--background-modifier-form-field);
-                border: 1px solid var(--background-modifier-border);
-            }
-            .jina-browse-button {
-                padding: 6px 12px;
-                background-color: var(--interactive-accent);
-                color: var(--text-on-accent);
-                border: none;
-                border-radius: 4px;
-                cursor: pointer;
-            }
-            .jina-button-container {
-                display: flex;
-                justify-content: flex-end;
-                margin-top: 12px;
-            }
-        `;
-  }
-  onClose() {
-    const { contentEl } = this;
-    contentEl.empty();
-  }
-};
-
-// ui/modals/update-hashes-modal.ts
-var import_obsidian12 = require("obsidian");
-var UpdateHashesModal = class extends import_obsidian12.Modal {
+// ui/modals/add-hash-boundary-modal.ts
+var AddHashBoundaryModal = class extends import_obsidian12.Modal {
   constructor(app, plugin, onSubmit) {
     super(app);
     this.filePaths = "";
@@ -1775,150 +1699,18 @@ var UpdateHashesModal = class extends import_obsidian12.Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
-    contentEl.createEl("h2", { text: "\u66F4\u65B0\u5D4C\u5165\u6570\u636E\u4E2D\u7684\u7B14\u8BB0\u54C8\u5E0C\u503C" });
-    const settingDiv = contentEl.createDiv();
-    settingDiv.addClass("jina-setting");
-    const descEl = settingDiv.createDiv();
-    descEl.addClass("setting-item-description");
-    descEl.setText('\u8BF7\u8F93\u5165\u4E00\u4E2A\u6216\u591A\u4E2A\u4ED3\u5E93\u76F8\u5BF9\u8DEF\u5F84 (\u7528\u82F1\u6587\u9017\u53F7 "," \u5206\u9694)\u3002\u8BF7\u4F7F\u7528\u6B63\u659C\u6760 "/" \u4F5C\u4E3A\u8DEF\u5F84\u5206\u9694\u7B26\u3002\u53EF\u4EE5\u662F\u5177\u4F53\u6587\u4EF6\u6216\u6587\u4EF6\u5939 (\u4F8B\u5982\uFF1A\u6587\u4EF6\u59391/\u7B14\u8BB0.md, \u6587\u4EF6\u59392/)\u3002');
-    const inputContainer = settingDiv.createDiv();
-    inputContainer.addClass("jina-path-input-container");
-    this.inputEl = document.createElement("textarea");
-    this.inputEl.addClass("jina-path-textarea");
-    this.inputEl.setAttr("rows", "3");
-    this.inputEl.setAttr("placeholder", "\u4F8B\u5982\uFF1ANotes/Note1.md, \u6587\u4EF6\u5939/");
-    this.inputEl.value = this.filePaths;
-    inputContainer.appendChild(this.inputEl);
-    const browseButton = document.createElement("button");
-    browseButton.setText("\u6D4F\u89C8...");
-    browseButton.addClass("jina-browse-button");
-    inputContainer.appendChild(browseButton);
-    this.inputEl.addEventListener("input", () => {
-      this.filePaths = this.inputEl.value;
-    });
-    browseButton.addEventListener("click", () => {
-      const cursorPos = this.inputEl.selectionStart;
-      const text = this.inputEl.value;
-      let startPos = text.lastIndexOf(",", cursorPos - 1);
-      if (startPos === -1)
-        startPos = 0;
-      else
-        startPos += 1;
-      const currentPath = text.substring(startPos, cursorPos).trim();
-      this.openPathSuggestModal(currentPath, (selectedPath) => {
-        if (selectedPath) {
-          const newValue = text.substring(0, startPos) + (startPos > 0 ? " " : "") + selectedPath + text.substring(cursorPos);
-          this.inputEl.value = newValue;
-          this.filePaths = newValue;
-          const newCursorPos = startPos + selectedPath.length + (startPos > 0 ? 1 : 0);
-          this.inputEl.setSelectionRange(newCursorPos, newCursorPos);
-          this.inputEl.focus();
-        }
-      });
-    });
-    const buttonContainer = contentEl.createDiv();
-    buttonContainer.addClass("jina-button-container");
-    const submitButton = buttonContainer.createEl("button");
-    submitButton.setText("\u66F4\u65B0\u54C8\u5E0C\u503C");
-    submitButton.addClass("mod-cta");
-    submitButton.addEventListener("click", () => {
-      if (!this.filePaths.trim()) {
-        new import_obsidian12.Notice("\u8BF7\u8F93\u5165\u81F3\u5C11\u4E00\u4E2A\u6587\u4EF6\u8DEF\u5F84\u3002");
-        return;
-      }
-      this.close();
-      this.onSubmit(this.filePaths);
-    });
-    this.addStyles(contentEl);
-  }
-  // 打开路径建议弹窗
-  openPathSuggestModal(currentPath, callback) {
-    const modal = new PathSuggestModal(this.app, this.allPaths, currentPath, callback);
-    modal.open();
-  }
-  // 添加样式
-  addStyles(contentEl) {
-    const styleEl = contentEl.createEl("style");
-    styleEl.textContent = `
-            .jina-setting {
-                padding: 12px 0;
-            }
-            .jina-path-input-container {
-                display: flex;
-                margin-top: 8px;
-                gap: 8px;
-                align-items: flex-start;
-            }
-            .jina-path-textarea {
-                flex-grow: 1;
-                min-height: 60px;
-                padding: 8px;
-                border-radius: 4px;
-                font-size: 14px;
-                background-color: var(--background-modifier-form-field);
-                border: 1px solid var(--background-modifier-border);
-            }
-            .jina-browse-button {
-                padding: 6px 12px;
-                background-color: var(--interactive-accent);
-                color: var(--text-on-accent);
-                border: none;
-                border-radius: 4px;
-                cursor: pointer;
-            }
-            .jina-button-container {
-                display: flex;
-                justify-content: flex-end;
-                margin-top: 12px;
-            }
-        `;
-  }
-  onClose() {
-    const { contentEl } = this;
-    contentEl.empty();
-  }
-};
-
-// ui/modals/add-hash-boundary-modal.ts
-var import_obsidian13 = require("obsidian");
-var AddHashBoundaryModal = class extends import_obsidian13.Modal {
-  constructor(app, plugin, onSubmit) {
-    super(app);
-    this.filePaths = "";
-    // 用于存储自动完成的文件和文件夹路径
-    this.allPaths = [];
-    this.plugin = plugin;
-    this.onSubmit = onSubmit;
-    this.loadAllPaths();
-  }
-  // 加载所有文件和文件夹路径
-  loadAllPaths() {
-    this.allPaths = [];
-    const allFiles = this.app.vault.getAllLoadedFiles();
-    for (const file of allFiles) {
-      if (file instanceof import_obsidian13.TFile && file.extension === "md") {
-        this.allPaths.push(file.path);
-      } else if (file instanceof import_obsidian13.TFolder) {
-        this.allPaths.push(file.path + "/");
-      }
-    }
-    this.allPaths.sort();
-  }
-  onOpen() {
-    const { contentEl } = this;
-    contentEl.empty();
     contentEl.createEl("h2", { text: "\u6279\u91CF\u6DFB\u52A0\u54C8\u5E0C\u8FB9\u754C\u6807\u8BB0" });
     const settingDiv = contentEl.createDiv();
     settingDiv.addClass("jina-setting");
     const descEl = settingDiv.createDiv();
     descEl.addClass("setting-item-description");
-    descEl.setText('\u4E3A\u6307\u5B9A\u7684\u7B14\u8BB0\u6587\u4EF6\u6DFB\u52A0 <!-- HASH_BOUNDARY --> \u6807\u8BB0\u3002\u8BF7\u8F93\u5165\u4E00\u4E2A\u6216\u591A\u4E2A\u4ED3\u5E93\u76F8\u5BF9\u8DEF\u5F84 (\u7528\u82F1\u6587\u9017\u53F7 "," \u5206\u9694)\u3002\u8BF7\u4F7F\u7528\u6B63\u659C\u6760 "/" \u4F5C\u4E3A\u8DEF\u5F84\u5206\u9694\u7B26\u3002\u53EF\u4EE5\u662F\u5177\u4F53\u6587\u4EF6\u6216\u6587\u4EF6\u5939 (\u4F8B\u5982\uFF1A\u6587\u4EF6\u59391/\u7B14\u8BB0.md, \u6587\u4EF6\u59392/)\u3002');
+    descEl.setText('\u4E3A\u6307\u5B9A\u7684\u7B14\u8BB0\u6587\u4EF6\u6DFB\u52A0 <!-- HASH_BOUNDARY --> \u6807\u8BB0\u3002\u8BF7\u8F93\u5165\u4E00\u4E2A\u6216\u591A\u4E2A\u4ED3\u5E93\u76F8\u5BF9\u8DEF\u5F84 (\u7528\u82F1\u6587\u9017\u53F7 "," \u5206\u9694)\u3002\u8BF7\u4F7F\u7528\u6B63\u659C\u6760 "/" \u4F5C\u4E3A\u8DEF\u5F84\u5206\u9694\u7B26\u3002(\u4F8B\u5982\uFF1A\u6587\u4EF6\u59391/\u7B14\u8BB0.md, \u6587\u4EF6\u59392/)\u3002');
     const inputContainer = settingDiv.createDiv();
     inputContainer.addClass("jina-path-input-container");
     this.inputEl = document.createElement("textarea");
     this.inputEl.addClass("jina-path-textarea");
     this.inputEl.setAttr("rows", "3");
-    this.inputEl.setAttr("placeholder", "\u4F8B\u5982\uFF1ANotes/Note1.md, \u6587\u4EF6\u5939/ \u6216\u7559\u7A7A\u5904\u7406\u6240\u6709\u6587\u4EF6");
+    this.inputEl.setAttr("placeholder", "Notes/Note1.md, \u7559\u7A7A\u5904\u7406\u6240\u6709\u6587\u4EF6");
     this.inputEl.value = this.filePaths;
     inputContainer.appendChild(this.inputEl);
     const browseButton = document.createElement("button");
@@ -2007,6 +1799,83 @@ var AddHashBoundaryModal = class extends import_obsidian13.Modal {
   }
 };
 
+// ui/modals/add-ai-tags-modal.ts
+var import_obsidian13 = require("obsidian");
+var AddAiTagsModal = class extends import_obsidian13.Modal {
+  constructor(app, plugin, onSubmit) {
+    super(app);
+    this.filePaths = "";
+    this.selectedMode = "smart";
+    // 用于存储自动完成的文件和文件夹路径
+    this.allPaths = [];
+    this.plugin = plugin;
+    this.onSubmit = onSubmit;
+    this.loadAllPaths();
+  }
+  // 加载所有文件和文件夹路径
+  loadAllPaths() {
+    this.allPaths = [];
+    const allFiles = this.app.vault.getAllLoadedFiles();
+    for (const file of allFiles) {
+      if (file instanceof import_obsidian13.TFile && file.extension === "md") {
+        this.allPaths.push(file.path);
+      } else if (file instanceof import_obsidian13.TFolder) {
+        this.allPaths.push(file.path + "/");
+      }
+    }
+    this.allPaths.sort();
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.createEl("h2", { text: "\u6279\u91CF\u63D2\u5165 AI \u6807\u7B7E" });
+    new import_obsidian13.Setting(contentEl).setName("\u751F\u6210\u6A21\u5F0F").setDesc("\u667A\u80FD = \u4EC5\u4E3A\u65E0\u6807\u7B7E\u65B0\u7B14\u8BB0\u751F\u6210\uFF1B\u5F3A\u5236 = \u603B\u662F\u91CD\u65B0\u751F\u6210").addDropdown((dd) => {
+      dd.addOption("smart", "\u667A\u80FD (\u4EC5\u65B0\u7B14\u8BB0)");
+      dd.addOption("force", "\u5F3A\u5236 (\u5168\u90E8\u91CD\u751F\u6210)");
+      dd.setValue(this.selectedMode);
+      dd.onChange((v) => this.selectedMode = v);
+    });
+    const pathSetting = new import_obsidian13.Setting(contentEl).setName("\u76EE\u6807\u6587\u4EF6/\u6587\u4EF6\u5939").setDesc('\u591A\u4E2A\u8DEF\u5F84\u7528\u9017\u53F7\u5206\u9694\uFF0C"/" \u8868\u793A\u6574\u4E2A\u4ED3\u5E93');
+    pathSetting.addTextArea((ta) => {
+      ta.inputEl.rows = 3;
+      ta.setPlaceholder("Notes/Note1.md, \u7559\u7A7A\u5904\u7406\u6240\u6709\u6587\u4EF6");
+      ta.setValue(this.filePaths);
+      ta.onChange((v) => {
+        this.filePaths = v;
+      });
+      this.inputEl = ta.inputEl;
+    });
+    pathSetting.addButton((btn) => {
+      btn.setButtonText("\u6D4F\u89C8...");
+      btn.onClick(() => {
+        this.openPathSuggestModal("", (selectedPath) => {
+          if (selectedPath) {
+            if (this.filePaths && this.filePaths.trim() !== "" && !this.filePaths.trim().endsWith(",")) {
+              this.filePaths += ", ";
+            }
+            this.filePaths += selectedPath;
+            this.inputEl.value = this.filePaths;
+          }
+        });
+      });
+    });
+    new import_obsidian13.Setting(contentEl).addButton((btn) => btn.setButtonText("\u53D6\u6D88").onClick(() => this.close())).addButton((btn) => btn.setButtonText("\u63D2\u5165\u6807\u7B7E").setCta().onClick(() => {
+      this.close();
+      this.onSubmit(this.filePaths, this.selectedMode);
+    }));
+  }
+  // 打开路径建议弹窗
+  openPathSuggestModal(currentPath, callback) {
+    const modal = new PathSuggestModal(this.app, this.allPaths, currentPath, callback);
+    modal.open();
+  }
+  // 旧版 addStyles 样式已移除，改用 Setting 默认样式
+  onClose() {
+    const { contentEl } = this;
+    contentEl.empty();
+  }
+};
+
 // main.ts
 var JinaLinkerPlugin = class extends import_obsidian14.Plugin {
   async onload() {
@@ -2018,11 +1887,9 @@ var JinaLinkerPlugin = class extends import_obsidian14.Plugin {
     this.pythonBridge = new PythonBridge(this.settings);
     this.hashManager = new HashManager(this.app, this.cacheManager);
     this.linkManager = new LinkManager(this.app, this.settings, this.cacheManager);
+    this.tagManager = new TagManager(this.app, this.settings, this.cacheManager);
     this.fileProcessor = new FileProcessor(this.app, this.cacheManager);
     this.notificationService = NotificationService.getInstance();
-    if (!this.settings.dataMigrationCompleted) {
-      await this.runMigration();
-    }
     console.log("\u2705 \u6027\u80FD\u76D1\u63A7\u5668\u548C\u670D\u52A1\u521D\u59CB\u5316\u5B8C\u6210");
     console.log("\u{1F389} Jina AI Linker \u63D2\u4EF6\u52A0\u8F7D\u5B8C\u6210\uFF01");
     this.addCommands();
@@ -2046,31 +1913,6 @@ var JinaLinkerPlugin = class extends import_obsidian14.Plugin {
       }
     });
     this.addCommand({
-      id: "calculate-note-content-hash",
-      name: "\u8BA1\u7B97\u7B14\u8BB0\u5185\u5BB9\u54C8\u5E0C\u503C (\u8BCA\u65AD\u7528)",
-      callback: () => {
-        console.log("\u{1F522} \u7528\u6237\u542F\u52A8\uFF1A\u8BA1\u7B97\u7B14\u8BB0\u5185\u5BB9\u54C8\u5E0C\u503C\u529F\u80FD");
-        new CalculateHashModal(this.app, this, async (filePath) => {
-          this.calculateHashForFile(filePath);
-        }).open();
-      }
-    });
-    this.addCommand({
-      id: "update-hashes-in-embeddings-file",
-      name: "\u66F4\u65B0\u5D4C\u5165\u6570\u636E\u4E2D\u7684\u7B14\u8BB0\u54C8\u5E0C\u503C",
-      callback: () => {
-        console.log("\u{1F504} \u7528\u6237\u542F\u52A8\uFF1A\u66F4\u65B0\u5D4C\u5165\u6570\u636E\u4E2D\u7684\u7B14\u8BB0\u54C8\u5E0C\u503C\u529F\u80FD");
-        new UpdateHashesModal(this.app, this, async (filePathsStr) => {
-          const relativePaths = filePathsStr.split(",").map((p) => p.trim()).filter((p) => p);
-          if (relativePaths.length === 0) {
-            new import_obsidian14.Notice("\u672A\u63D0\u4F9B\u6709\u6548\u7684\u6587\u4EF6\u8DEF\u5F84\u3002");
-            return;
-          }
-          await this.fileProcessor.updateHashesInEmbeddingsFile(relativePaths);
-        }).open();
-      }
-    });
-    this.addCommand({
       id: "add-hash-boundary-markers",
       name: "\u6279\u91CF\u6DFB\u52A0\u54C8\u5E0C\u8FB9\u754C\u6807\u8BB0",
       callback: () => {
@@ -2083,6 +1925,16 @@ var JinaLinkerPlugin = class extends import_obsidian14.Plugin {
           } else {
             new import_obsidian14.Notice("\u274C \u6279\u91CF\u6DFB\u52A0\u54C8\u5E0C\u8FB9\u754C\u6807\u8BB0\u5931\u8D25");
           }
+        }).open();
+      }
+    });
+    this.addCommand({
+      id: "insert-ai-tags-into-notes",
+      name: "\u6279\u91CF\u63D2\u5165 AI \u6807\u7B7E\u5230\u7B14\u8BB0",
+      callback: () => {
+        console.log("\u{1F3F7}\uFE0F \u7528\u6237\u542F\u52A8\uFF1A\u6279\u91CF\u63D2\u5165 AI \u6807\u7B7E\u529F\u80FD");
+        new AddAiTagsModal(this.app, this, (paths, mode) => {
+          this.runTagOnlyFlow(paths, mode);
         }).open();
       }
     });
@@ -2105,25 +1957,6 @@ var JinaLinkerPlugin = class extends import_obsidian14.Plugin {
         });
       });
       menu.addItem((item) => {
-        item.setTitle("\u8BA1\u7B97\u7B14\u8BB0\u5185\u5BB9\u54C8\u5E0C\u503C (\u8BCA\u65AD\u7528)").setIcon("hash").onClick(() => {
-          new CalculateHashModal(this.app, this, async (filePath) => {
-            this.calculateHashForFile(filePath);
-          }).open();
-        });
-      });
-      menu.addItem((item) => {
-        item.setTitle("\u66F4\u65B0\u5D4C\u5165\u6570\u636E\u4E2D\u7684\u7B14\u8BB0\u54C8\u5E0C\u503C").setIcon("refresh-cw").onClick(() => {
-          new UpdateHashesModal(this.app, this, async (filePathsStr) => {
-            const relativePaths = filePathsStr.split(",").map((p) => p.trim()).filter((p) => p);
-            if (relativePaths.length === 0) {
-              new import_obsidian14.Notice("\u672A\u63D0\u4F9B\u6709\u6548\u7684\u6587\u4EF6\u8DEF\u5F84\u3002");
-              return;
-            }
-            await this.fileProcessor.updateHashesInEmbeddingsFile(relativePaths);
-          }).open();
-        });
-      });
-      menu.addItem((item) => {
         item.setTitle("\u6279\u91CF\u6DFB\u52A0\u54C8\u5E0C\u8FB9\u754C\u6807\u8BB0").setIcon("hash").onClick(() => {
           new AddHashBoundaryModal(this.app, this, async (targetPaths) => {
             const result = await this.fileProcessor.addHashBoundaryMarkers(targetPaths);
@@ -2133,6 +1966,13 @@ var JinaLinkerPlugin = class extends import_obsidian14.Plugin {
             } else {
               new import_obsidian14.Notice("\u274C \u6279\u91CF\u6DFB\u52A0\u54C8\u5E0C\u8FB9\u754C\u6807\u8BB0\u5931\u8D25");
             }
+          }).open();
+        });
+      });
+      menu.addItem((item) => {
+        item.setTitle("\u6279\u91CF\u63D2\u5165 AI \u6807\u7B7E").setIcon("tag").onClick(() => {
+          new AddAiTagsModal(this.app, this, (paths, mode) => {
+            this.runTagOnlyFlow(paths, mode);
           }).open();
         });
       });
@@ -2159,6 +1999,7 @@ var JinaLinkerPlugin = class extends import_obsidian14.Plugin {
           const insertResult = await this.linkManager.insertAISuggestedLinksIntoNotes(options.scanPath);
           if (insertResult.success) {
             const { processedFiles, updatedFiles } = insertResult.data;
+            await this.tagManager.insertAIGeneratedTagsIntoNotes(options.scanPath);
             progressModal.setCompleted(`\u2705 \u5904\u7406\u5B8C\u6210\uFF01\u68C0\u67E5\u4E86 ${processedFiles} \u4E2A\u6587\u4EF6\uFF0C\u66F4\u65B0\u4E86 ${updatedFiles} \u4E2A\u6587\u4EF6`);
             const metrics = this.performanceMonitor.getMetricsSummary();
             log("info", "\u6027\u80FD\u7EDF\u8BA1", metrics);
@@ -2175,6 +2016,34 @@ var JinaLinkerPlugin = class extends import_obsidian14.Plugin {
       }
     }).open();
   }
+  // 仅生成并插入 AI 标签的快捷流程
+  async runTagOnlyFlow(targetPaths, mode) {
+    const originalMode = this.settings.tagsMode;
+    this.settings.tagsMode = mode;
+    const progress = new ProgressModal(this.app, "\u751F\u6210\u5E76\u63D2\u5165 AI \u6807\u7B7E", () => this.pythonBridge.cancelOperation());
+    progress.open();
+    try {
+      progress.updateProgress(0, 2, "\u8FD0\u884C\u540E\u7AEF", "\u751F\u6210 AI \u6807\u7B7E\u2026");
+      const pyRes = await this.pythonBridge.runPythonScript(
+        targetPaths || "/",
+        "skip",
+        // 评分跳过
+        this.manifest.dir || "",
+        this.app.vault.adapter.getBasePath()
+      );
+      if (!pyRes.success)
+        throw new Error("Python \u6267\u884C\u5931\u8D25");
+      progress.updateProgress(1, 2, "\u5199\u5165\u6807\u7B7E", "\u63D2\u5165 front-matter\u2026");
+      const { processed, updated } = await this.tagManager.insertAIGeneratedTagsIntoNotes(targetPaths);
+      progress.setCompleted(`\u2705 \u5904\u7406 ${processed} \u6587\u4EF6\uFF0C\u66F4\u65B0 ${updated}`);
+      setTimeout(() => progress.close(), 2500);
+    } catch (err) {
+      progress.setError("\u751F\u6210/\u63D2\u5165\u6807\u7B7E\u5931\u8D25");
+      log("error", "runTagOnlyFlow error", err);
+    } finally {
+      this.settings.tagsMode = originalMode;
+    }
+  }
   // 计算单个文件的哈希值
   async calculateHashForFile(filePath) {
     const normalizedFilePath = (0, import_obsidian14.normalizePath)(filePath);
@@ -2188,26 +2057,9 @@ var JinaLinkerPlugin = class extends import_obsidian14.Plugin {
       new import_obsidian14.Notice(`\u6587\u4EF6 "${filePath}" \u7684\u5185\u5BB9\u54C8\u5E0C\u503C: ${hash}`);
     }
   }
+  // 迁移逻辑已废弃，保留空实现避免旧代码引用
   async runMigration() {
-    this.notificationService.showNotice("Data migration to SQLite required. Starting process...", 5e3);
-    log("info", "Data migration to SQLite required. Starting process...");
-    if (!this.manifest.dir) {
-      const errorMsg = "Plugin directory not found. Cannot run migration.";
-      log("error", errorMsg);
-      this.notificationService.showError(errorMsg);
-      return Promise.reject(new Error(errorMsg));
-    }
-    try {
-      await this.pythonBridge.runMigration(
-        this.manifest.dir,
-        this.app.vault.adapter.getBasePath()
-      );
-      this.settings.dataMigrationCompleted = true;
-      await this.saveSettings();
-      return Promise.resolve();
-    } catch (error) {
-      return Promise.reject(error);
-    }
+    return Promise.resolve();
   }
   async loadSettings() {
     const loadedData = await this.loadData();

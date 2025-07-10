@@ -29,6 +29,11 @@ export interface JinaLinkerSettings {
     maxPairsPerRequest: number;   // 每次API请求的最大笔记对数
     maxCharsPerNote: number;      // 每个笔记在AI评分时的最大字符数
     maxTotalCharsPerRequest: number;  // 每次API请求的最大总字符数
+    // AI 标签生成
+    tagsMode: 'force' | 'smart' | 'skip';
+    maxTagsPerNote: number;
+    useCustomTagPrompt: boolean;
+    customTagPrompt: string;
 }
 
 // 默认评分提示词
@@ -73,6 +78,27 @@ export const DEFAULT_SCORING_PROMPT = `作为笔记关联性评分专家，请�
 
 请只回复一个0-10的整数评分，不要有任何解释或额外文字！`;
 
+// 新增: 默认标签提示词常量
+export const DEFAULT_TAG_PROMPT = `你是一位知识管理与卡片笔记法（Zettelkasten）专家，擅长构建结构清晰、易于连接和检索的个人知识库。
+
+你的任务是：针对我提供的每一篇笔记正文，为其生成一组精准、精炼且具有系统性的「中文标签」。这些标签应揭示笔记的核心思想，并帮助我将其融入到更广阔的知识网络中。
+
+请严格遵循以下原则：
+1. 【核心主题】识别笔记最关键、最核心的主题或关键词。
+2. 【抽象概念】提炼能抽象出更高层次思想的概念。
+3. 【知识领域】尽量使用分层标签定位知识领域，格式如：哲学/古希腊哲学、计算机科学/人工智能。
+4. 【关联性】思考本笔记可与哪些主题产生有意义的连接。
+
+输出规则：
+• 每篇笔记最多 5 个标签；
+• 标签全部使用中文；
+• 标签之间使用英文逗号","分隔，逗号后不加空格；
+• 每个标签内部不得包含空格；
+• 只回复一行，且严格使用以下格式（注意冒号后有一个空格）：
+  <笔记标题>: 标签1,标签2,标签3
+
+除了这行标签信息之外，不要输出任何额外的说明、解释或多余文字！`;
+
 export const DEFAULT_SETTINGS: JinaLinkerSettings = {
     pythonPath: '',
     jinaApiKey: '',
@@ -88,11 +114,16 @@ export const DEFAULT_SETTINGS: JinaLinkerSettings = {
     maxCandidatesPerSourceForAIScoring: 20,
     minAiScoreForLinkInsertion: 6,
     maxLinksToInsertPerNote: 10,
-    dataMigrationCompleted: false,
+    dataMigrationCompleted: true,
     customScoringPrompt: DEFAULT_SCORING_PROMPT,
     useCustomScoringPrompt: false,
     // 批量处理默认设置
     maxPairsPerRequest: 10,
     maxCharsPerNote: 2000,
-    maxTotalCharsPerRequest: 23000
+    maxTotalCharsPerRequest: 23000,
+    // 标签生成默认
+    tagsMode: 'smart',
+    maxTagsPerNote: 5,
+    useCustomTagPrompt: false,
+    customTagPrompt: DEFAULT_TAG_PROMPT,
 };

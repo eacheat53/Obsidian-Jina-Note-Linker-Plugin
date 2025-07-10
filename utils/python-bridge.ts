@@ -87,10 +87,20 @@ export class PythonBridge {
                     args.push('--ai_model_name', selectedAIModel.modelName);
                 }
                 
-                // 添加自定义评分提示词设置
+                // -------- AI 评分自定义提示词 --------
                 if (this.settings.useCustomScoringPrompt) {
                     args.push('--use_custom_scoring_prompt');
                     args.push('--custom_scoring_prompt', this.settings.customScoringPrompt);
+                }
+
+                // -------- AI 标签生成相关参数 --------
+                // tags_mode: force / smart / skip
+                args.push('--tags_mode', this.settings.tagsMode);
+
+                // 使用自定义标签提示词时沿用现有参数名 (复用 --custom_scoring_prompt 逻辑)
+                if (this.settings.useCustomTagPrompt) {
+                    args.push('--use_custom_scoring_prompt');
+                    args.push('--custom_scoring_prompt', this.settings.customTagPrompt);
                 }
                 
                 // 添加扫描路径
@@ -229,6 +239,12 @@ export class PythonBridge {
             log('error', errorMsg);
             this.notificationService.showError(errorMsg);
             return Promise.reject(new Error(errorMsg));
+        }
+
+        if (!this.settings.pythonPath) {
+            log('warn', '缺少 pythonPath，跳过数据迁移。');
+            this.notificationService.showNotice('⚠️ 未配置 Python 路径，已跳过旧数据迁移', 4000);
+            return Promise.resolve();
         }
 
         return new Promise((resolve, reject) => {

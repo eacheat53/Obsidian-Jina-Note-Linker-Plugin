@@ -78,7 +78,7 @@ def process_and_embed_notes(
             body, fm, _ = read_markdown_with_frontmatter(abs_path)
 
             # 处理 note_id
-            note_id = fm.get("note_id") or fm.get("jina_id")
+            note_id = fm.get("note_id")
             if not note_id:
                 note_id = str(uuid.uuid4())
                 fm["note_id"] = note_id

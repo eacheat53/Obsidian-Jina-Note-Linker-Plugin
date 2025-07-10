@@ -14,9 +14,6 @@ from python_src.config import (
     DEFAULT_MAIN_DB_FILE_NAME,
 )
 
-# sqlite_to_json 位于迁移模块，避免循环导入时局部导入
-from python_src.migration.migrate_sqlite import sqlite_to_json  # noqa: E402
-
 logger = get_logger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -29,7 +26,10 @@ def write_markdown_with_frontmatter(file_path: str, frontmatter: Dict, body: str
     if frontmatter:
         fm_dump = yaml.dump(frontmatter, allow_unicode=True, default_flow_style=False, sort_keys=False)
         output = f"---\n{fm_dump.strip()}\n---\n"
-    output += body
+
+    # 防止正文首行空白
+    body_clean = body.lstrip("\n")
+    output += body_clean
 
     path = Path(file_path)
     path.write_text(output, encoding="utf-8")
@@ -134,8 +134,50 @@ def export_ai_scores_to_json(
     logger.info("[成功] 导出 %s 源笔记的 AI 评分", len(source_map))
 
 
+def export_ai_tags_to_json(
+    project_root_abs: str,
+    output_dir_abs: str,
+    export_dir_name: str = ".jina-linker",
+) -> None:
+    """导出 note_tags 为 JSON。"""
+    logger.info("[导出] 正在导出 AI 标签到 JSON…")
+
+    json_dir = Path(project_root_abs) / export_dir_name
+    json_dir.mkdir(parents=True, exist_ok=True)
+
+    db_path = Path(output_dir_abs) / DEFAULT_MAIN_DB_FILE_NAME
+    tags_json = json_dir / "ai_tags.json"
+    if not db_path.exists():
+        logger.warning("DB 不存在: %s", db_path)
+        return
+
+    conn = sqlite3.connect(db_path)
+    cur = conn.cursor()
+
+    tags_map: Dict[str, list] = {}
+    for note_id, tag in cur.execute("SELECT note_id, tag FROM note_tags"):
+        cur2 = conn.execute("SELECT file_name FROM notes WHERE note_id = ?", (note_id,))
+        row = cur2.fetchone()
+        if not row:
+            continue
+        file_name = row[0]
+        tags_map.setdefault(file_name, []).append(tag)
+
+    output = {
+        "_metadata": {
+            "description": "AI generated tags (grouped by note)",
+            "exported_from": db_path.name,
+        },
+        "ai_tags_by_note": tags_map,
+    }
+
+    tags_json.write_text(json.dumps(output, ensure_ascii=False, indent=2), encoding="utf-8")
+    conn.close()
+    logger.info("[成功] 导出 %s 篇笔记标签", len(tags_map))
+
 __all__ = [
     "write_markdown_with_frontmatter",
     "export_embeddings_to_json",
     "export_ai_scores_to_json",
+    "export_ai_tags_to_json",
 ]
