@@ -1,7 +1,7 @@
 {
     "id": "jina-obsidian-linker",
     "name": "Jina AI Note Linker",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "description": "Uses Jina AI and AI to process notes, find similarities, and suggest links by running script.",
     "author": "Eacheat53",
     "authorUrl": "https://github.com/eacheat53",
