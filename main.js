@@ -124,14 +124,32 @@ var DEFAULT_SCORING_PROMPT = `\u4F5C\u4E3A\u7B14\u8BB0\u5173\u8054\u6027\u8BC4\u
   \u2022 \u5E76\u7F6E\u9605\u8BFB\u65E0\u6CD5\u4EA7\u751F\u6709\u610F\u4E49\u7684\u5173\u8054\u6216\u542F\u53D1
 
 \u8BF7\u53EA\u56DE\u590D\u4E00\u4E2A0-10\u7684\u6574\u6570\u8BC4\u5206\uFF0C\u4E0D\u8981\u6709\u4EFB\u4F55\u89E3\u91CA\u6216\u989D\u5916\u6587\u5B57\uFF01`;
-var DEFAULT_TAG_PROMPT = `\u8BF7\u4E3A\u4E0B\u5217\u7B14\u8BB0\u751F\u6210 3~5 \u4E2A\u7B80\u6D01\u4E2D\u6587\u6807\u7B7E\uFF0C\u7528\u9017\u53F7\u5206\u9694\uFF0C\u907F\u514D\u7A7A\u683C\u3002\u683C\u5F0F: <title>: tag1, tag2, tag3`;
+var DEFAULT_TAG_PROMPT = `\u4F60\u662F\u4E00\u4F4D\u77E5\u8BC6\u7BA1\u7406\u4E0E\u5361\u7247\u7B14\u8BB0\u6CD5\uFF08Zettelkasten\uFF09\u4E13\u5BB6\uFF0C\u64C5\u957F\u6784\u5EFA\u7ED3\u6784\u6E05\u6670\u3001\u6613\u4E8E\u8FDE\u63A5\u548C\u68C0\u7D22\u7684\u4E2A\u4EBA\u77E5\u8BC6\u5E93\u3002
+
+\u4F60\u7684\u4EFB\u52A1\u662F\uFF1A\u9488\u5BF9\u6211\u63D0\u4F9B\u7684\u6BCF\u4E00\u7BC7\u7B14\u8BB0\u6B63\u6587\uFF0C\u4E3A\u5176\u751F\u6210\u4E00\u7EC4\u7CBE\u51C6\u3001\u7CBE\u70BC\u4E14\u5177\u6709\u7CFB\u7EDF\u6027\u7684\u300C\u4E2D\u6587\u6807\u7B7E\u300D\u3002\u8FD9\u4E9B\u6807\u7B7E\u5E94\u63ED\u793A\u7B14\u8BB0\u7684\u6838\u5FC3\u601D\u60F3\uFF0C\u5E76\u5E2E\u52A9\u6211\u5C06\u5176\u878D\u5165\u5230\u66F4\u5E7F\u9614\u7684\u77E5\u8BC6\u7F51\u7EDC\u4E2D\u3002
+
+\u8BF7\u4E25\u683C\u9075\u5FAA\u4EE5\u4E0B\u539F\u5219\uFF1A
+1. \u3010\u6838\u5FC3\u4E3B\u9898\u3011\u8BC6\u522B\u7B14\u8BB0\u6700\u5173\u952E\u3001\u6700\u6838\u5FC3\u7684\u4E3B\u9898\u6216\u5173\u952E\u8BCD\u3002
+2. \u3010\u62BD\u8C61\u6982\u5FF5\u3011\u63D0\u70BC\u80FD\u62BD\u8C61\u51FA\u66F4\u9AD8\u5C42\u6B21\u601D\u60F3\u7684\u6982\u5FF5\u3002
+3. \u3010\u77E5\u8BC6\u9886\u57DF\u3011\u5C3D\u91CF\u4F7F\u7528\u5206\u5C42\u6807\u7B7E\u5B9A\u4F4D\u77E5\u8BC6\u9886\u57DF\uFF0C\u683C\u5F0F\u5982\uFF1A\u54F2\u5B66/\u53E4\u5E0C\u814A\u54F2\u5B66\u3001\u8BA1\u7B97\u673A\u79D1\u5B66/\u4EBA\u5DE5\u667A\u80FD\u3002
+4. \u3010\u5173\u8054\u6027\u3011\u601D\u8003\u672C\u7B14\u8BB0\u53EF\u4E0E\u54EA\u4E9B\u4E3B\u9898\u4EA7\u751F\u6709\u610F\u4E49\u7684\u8FDE\u63A5\u3002
+
+\u8F93\u51FA\u89C4\u5219\uFF1A
+\u2022 \u6BCF\u7BC7\u7B14\u8BB0\u6700\u591A 5 \u4E2A\u6807\u7B7E\uFF1B
+\u2022 \u6807\u7B7E\u5168\u90E8\u4F7F\u7528\u4E2D\u6587\uFF1B
+\u2022 \u6807\u7B7E\u4E4B\u95F4\u4F7F\u7528\u82F1\u6587\u9017\u53F7","\u5206\u9694\uFF0C\u9017\u53F7\u540E\u4E0D\u52A0\u7A7A\u683C\uFF1B
+\u2022 \u6BCF\u4E2A\u6807\u7B7E\u5185\u90E8\u4E0D\u5F97\u5305\u542B\u7A7A\u683C\uFF1B
+\u2022 \u53EA\u56DE\u590D\u4E00\u884C\uFF0C\u4E14\u4E25\u683C\u4F7F\u7528\u4EE5\u4E0B\u683C\u5F0F\uFF08\u6CE8\u610F\u5192\u53F7\u540E\u6709\u4E00\u4E2A\u7A7A\u683C\uFF09\uFF1A
+  <\u7B14\u8BB0\u6807\u9898>: \u6807\u7B7E1,\u6807\u7B7E2,\u6807\u7B7E3
+
+\u9664\u4E86\u8FD9\u884C\u6807\u7B7E\u4FE1\u606F\u4E4B\u5916\uFF0C\u4E0D\u8981\u8F93\u51FA\u4EFB\u4F55\u989D\u5916\u7684\u8BF4\u660E\u3001\u89E3\u91CA\u6216\u591A\u4F59\u6587\u5B57\uFF01`;
 var DEFAULT_SETTINGS = {
   pythonPath: "",
   jinaApiKey: "",
   aiModels: { ...DEFAULT_AI_MODELS },
   selectedAIProvider: "deepseek",
   similarityThreshold: 0.7,
-  excludedFolders: ".obsidian, Scripts, assets, Excalidraw, .trash, ",
+  excludedFolders: ".obsidian, Scripts, assets, Excalidraw, .trash, Python-Templater-Plugin-Output, 20_\u5DF4\u522B\u5854/\u97F3\u4E50",
   excludedFilesPatterns: "*excalidraw*, template*.md, *.kanban.md, ^moc$, ^index$",
   defaultScanPath: "/",
   jinaModelName: "jina-embeddings-v3",
@@ -637,7 +655,7 @@ var PythonBridge = class {
   }
 };
 
-// services/ash-manager.ts
+// services/hash-manager.ts
 var import_obsidian3 = require("obsidian");
 var crypto = __toESM(require("crypto"));
 var HashManager = class {
@@ -1155,8 +1173,14 @@ var JinaLinkerSettingTab = class extends import_obsidian8.PluginSettingTab {
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian8.Setting(containerEl).setClass("jina-settings-block").setName("\u6392\u9664\u7684\u6587\u4EF6\u6A21\u5F0F").setDesc("Python \u811A\u672C\u5904\u7406\u65F6\u8981\u6392\u9664\u7684\u6587\u4EF6\u540D Glob \u6A21\u5F0F (\u534A\u89D2\u9017\u53F7\u5206\u9694)\u3002").addText(
-      (text) => text.setPlaceholder("\u4F8B\u5982\uFF1A*.excalidraw, draft-*.md, ZK_*").setValue(this.plugin.settings.excludedFilesPatterns).onChange(async (value) => {
+    new import_obsidian8.Setting(containerEl).setClass("jina-settings-block").setName("\u6392\u9664\u7684\u6587\u4EF6\u5939").setDesc('Python \u811A\u672C\u5904\u7406\u65F6\u8981\u6392\u9664\u7684\u6587\u4EF6\u5939 (\u534A\u89D2\u9017\u53F7\u5206\u9694)\u3002\u652F\u6301\u4E24\u79CD\u683C\u5F0F\uFF1A\u5355\u4E00\u6587\u4EF6\u5939\u540D(\u5982"Scripts")\u548C\u5B8C\u6574\u8DEF\u5F84(\u5982"20_\u5DF4\u522B\u5854/\u97F3\u4E50")\u3002').addText(
+      (text) => text.setPlaceholder("\u4F8B\u5982\uFF1A.obsidian, Scripts, 20_\u5DF4\u522B\u5854/\u97F3\u4E50").setValue(this.plugin.settings.excludedFolders).onChange(async (value) => {
+        this.plugin.settings.excludedFolders = value;
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian8.Setting(containerEl).setClass("jina-settings-block").setName("\u6392\u9664\u7684\u6587\u4EF6\u6A21\u5F0F").setDesc('\u8981\u6392\u9664\u7684\u6587\u4EF6\u6A21\u5F0F (\u534A\u89D2\u9017\u53F7\u5206\u9694)\u3002\u652F\u6301\u4E24\u79CD\u683C\u5F0F\uFF1A\u7EAF\u6587\u4EF6\u540D\u6A21\u5F0F(\u5982"*.excalidraw")\u548C\u8DEF\u5F84\u6A21\u5F0F(\u5982"20_\u5DF4\u522B\u5854/\u97F3\u4E50/*.md")\u3002').addText(
+      (text) => text.setPlaceholder("\u4F8B\u5982\uFF1A*.excalidraw, template*.md, 20_\u5DF4\u522B\u5854/\u97F3\u4E50/*.md").setValue(this.plugin.settings.excludedFilesPatterns).onChange(async (value) => {
         this.plugin.settings.excludedFilesPatterns = value;
         await this.plugin.saveSettings();
       })
@@ -1276,15 +1300,9 @@ var JinaLinkerSettingTab = class extends import_obsidian8.PluginSettingTab {
     new import_obsidian8.Setting(containerEl).setClass("jina-settings-block").setName("\u53D6\u6D88\u5F53\u524D\u64CD\u4F5C").setDesc("\u53D6\u6D88\u6B63\u5728\u8FDB\u884C\u7684Python\u811A\u672C\u6216\u94FE\u63A5\u63D2\u5165\u64CD\u4F5C\u3002").addButton((button) => button.setButtonText("\u53D6\u6D88\u64CD\u4F5C").setClass("mod-warning").onClick(() => {
       this.plugin.cancelCurrentOperation();
     }));
-    containerEl.createEl("div", { cls: "jina-settings-section", text: "" }).innerHTML = '<div class="jina-settings-section-title">AI \u6807\u7B7E\u751F\u6210</div>';
-    new import_obsidian8.Setting(containerEl).setClass("jina-settings-block").setName("\u6BCF\u7BC7\u7B14\u8BB0\u6700\u591A\u6807\u7B7E\u6570").addText(
-      (t) => t.setPlaceholder("5").setValue(String(this.plugin.settings.maxTagsPerNote)).onChange(async (v) => {
-        this.plugin.settings.maxTagsPerNote = parseInt(v) || 5;
-        await this.plugin.saveSettings();
-      })
-    );
-    new import_obsidian8.Setting(containerEl).setClass("jina-settings-block").setName("\u4F7F\u7528\u81EA\u5B9A\u4E49\u6807\u7B7E\u63D0\u793A\u8BCD").setDesc("\u542F\u7528\u540E\u5C06\u4F7F\u7528\u4E0B\u65B9\u81EA\u5B9A\u4E49\u7684\u6807\u7B7E\u63D0\u793A\u8BCD\uFF0C\u800C\u975E\u9ED8\u8BA4\u63D0\u793A\u8BCD\u3002").addToggle((tg) => tg.setValue(this.plugin.settings.useCustomTagPrompt).onChange(async (v) => {
-      this.plugin.settings.useCustomTagPrompt = v;
+    containerEl.createEl("div", { cls: "jina-settings-section", text: "" }).innerHTML = '<div class="jina-settings-section-title">AI \u6807\u7B7E\u751F\u6210\u8BBE\u7F6E</div>';
+    new import_obsidian8.Setting(containerEl).setClass("jina-settings-block").setName("\u4F7F\u7528\u81EA\u5B9A\u4E49\u6807\u7B7E\u63D0\u793A\u8BCD").setDesc("\u542F\u7528\u540E\u5C06\u4F7F\u7528\u4E0B\u65B9\u81EA\u5B9A\u4E49\u7684\u6807\u7B7E\u63D0\u793A\u8BCD\uFF0C\u800C\u975E\u9ED8\u8BA4\u63D0\u793A\u8BCD\u3002\u6CE8\u610F\uFF1A\u7CFB\u7EDF\u5C06\u81EA\u52A8\u6DFB\u52A0\u683C\u5F0F\u8981\u6C42\u548C\u7ED3\u5C3E\u63D0\u793A\uFF0C\u4EE5\u786E\u4FDD\u8F93\u51FA\u7B26\u5408\u9884\u671F\u683C\u5F0F\u3002").addToggle((toggle) => toggle.setValue(this.plugin.settings.useCustomTagPrompt).onChange(async (value) => {
+      this.plugin.settings.useCustomTagPrompt = value;
       await this.plugin.saveSettings();
       this.display();
     }));
@@ -1396,7 +1414,7 @@ var JinaLinkerSettingTab = class extends import_obsidian8.PluginSettingTab {
       case "claude":
         return ["claude-4-opus", "claude-3.7-sonnet"];
       case "gemini":
-        return ["gemini-20.5 flash", "gemini-2.5-pro"];
+        return ["gemini-2.5 flash", "gemini-2.5-pro"];
       default:
         return [];
     }
@@ -1999,8 +2017,7 @@ var JinaLinkerPlugin = class extends import_obsidian14.Plugin {
           const insertResult = await this.linkManager.insertAISuggestedLinksIntoNotes(options.scanPath);
           if (insertResult.success) {
             const { processedFiles, updatedFiles } = insertResult.data;
-            await this.tagManager.insertAIGeneratedTagsIntoNotes(options.scanPath);
-            progressModal.setCompleted(`\u2705 \u5904\u7406\u5B8C\u6210\uFF01\u68C0\u67E5\u4E86 ${processedFiles} \u4E2A\u6587\u4EF6\uFF0C\u66F4\u65B0\u4E86 ${updatedFiles} \u4E2A\u6587\u4EF6`);
+            progressModal.setCompleted(`\u2705 \u94FE\u63A5\u63D2\u5165\u5B8C\u6210\uFF01\u68C0\u67E5\u4E86 ${processedFiles} \u4E2A\u6587\u4EF6\uFF0C\u63D2\u5165\u94FE\u63A5\u5230 ${updatedFiles} \u4E2A\u6587\u4EF6`);
             const metrics = this.performanceMonitor.getMetricsSummary();
             log("info", "\u6027\u80FD\u7EDF\u8BA1", metrics);
             setTimeout(() => progressModal.close(), 3e3);

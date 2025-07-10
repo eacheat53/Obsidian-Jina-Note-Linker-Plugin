@@ -67,41 +67,104 @@ def list_markdown_files(
     excluded_folders: List[str] | None = None,
     excluded_files_patterns: List[str] | None = None,
 ) -> List[str]:
-    """遍历目录，返回相对于 project_root 的 .md 文件路径列表。"""
-    excluded_folders = [ef.lower() for ef in (excluded_folders or [])]
+    """遍历目录，返回相对于 project_root 的 .md 文件路径列表。
+    
+    增强的排除功能:
+    1. excluded_folders 支持两种格式:
+       - 单一文件夹名: 如 "Scripts"、".trash" (不带路径)
+       - 完整路径格式: 如 "20_巴别塔/音乐" (包含路径分隔符)
+       
+    2. excluded_files_patterns 支持两种模式:
+       - 纯文件名模式: 如 "*.excalidraw"、"template*.md" (不含路径)
+       - 路径模式: 如 "20_巴别塔/音乐/*.md" (包含路径分隔符)
+    
+    当使用路径模式时，匹配检查的是完整的相对路径。
+    """
+    excluded_folders = excluded_folders or []
     excluded_files_patterns = excluded_files_patterns or []
-
+    
+    # 处理排除文件夹：支持完整路径和单独文件夹名
+    simple_folders = []  # 单一文件夹名
+    path_folders = []    # 包含路径的文件夹
+    
+    for ef in excluded_folders:
+        ef = ef.lower().strip()
+        if ef:
+            if '/' in ef:
+                # 是一个路径，用于完整路径匹配
+                path_folders.append(ef)
+            else:
+                # 是一个单独的文件夹名
+                simple_folders.append(ef)
+    
     if not os.path.isdir(scan_directory_abs):
         logger.error("扫描路径 %s 不是有效文件夹。", scan_directory_abs)
         return []
 
-    # Compile glob patterns once
-    compiled_patterns: List[re.Pattern[str]] = []
+    # Compile glob patterns for file exclusion
+    file_patterns = []
+    path_patterns = []
     for pat in excluded_files_patterns:
+        pat = pat.strip()
+        if not pat:
+            continue
+            
         try:
-            compiled_patterns.append(re.compile(fnmatch.translate(pat), re.IGNORECASE))
+            if '/' in pat:
+                # 包含路径的模式，用于完整路径匹配
+                path_patterns.append(re.compile(fnmatch.translate(pat), re.IGNORECASE))
+            else:
+                # 仅文件名的模式
+                file_patterns.append(re.compile(fnmatch.translate(pat), re.IGNORECASE))
         except re.error as exc:
             logger.warning("无效的排除文件模式 '%s': %s", pat, exc)
 
     markdown_files: List[str] = []
 
     for root, dirs, files in os.walk(scan_directory_abs, topdown=True):
-        dirs[:] = [d for d in dirs if d.lower() not in excluded_folders]
+        # 排除单一文件夹名
+        dirs[:] = [d for d in dirs if d.lower() not in simple_folders]
+        
+        # 排除特定路径下的文件夹
+        rel_dir = os.path.relpath(root, project_root_abs).replace(os.sep, "/")
+        if rel_dir == '.':
+            rel_dir = ''
+            
+        # 检查当前目录是否匹配任何路径排除模式
+        if any(rel_dir.lower().startswith(path_folder) or rel_dir.lower() == path_folder 
+               for path_folder in path_folders):
+            dirs[:] = []  # 清空子目录列表，不再深入
+            continue
 
         for fname in files:
             if not fname.endswith(".md"):
                 continue
 
-            # filename pattern filter
-            if any(p.search(fname.lower()) or p.search(os.path.splitext(fname)[0].lower()) for p in compiled_patterns):
+            # 排除特定文件名模式
+            basename = os.path.splitext(fname)[0].lower()
+            if any(p.search(fname.lower()) or p.search(basename) for p in file_patterns):
                 continue
 
+            # 生成相对路径
             file_abs_path = os.path.join(root, fname)
             rel_path = os.path.relpath(file_abs_path, project_root_abs).replace(os.sep, "/")
-            # Folder exclusion (intermediate parts)
-            parts = rel_path.lower().split("/")[:-1]
-            if any(p in excluded_folders for p in parts):
+            
+            # 检查完整路径是否匹配任何路径模式
+            if any(p.search(rel_path.lower()) for p in path_patterns):
                 continue
+                
+            # 确保不在排除的路径中
+            parts = rel_path.split("/")
+            should_exclude = False
+            for i in range(len(parts) - 1):
+                partial_path = "/".join(parts[:i+1]).lower()
+                if partial_path in path_folders:
+                    should_exclude = True
+                    break
+            
+            if should_exclude:
+                continue
+                
             markdown_files.append(rel_path)
 
     return markdown_files

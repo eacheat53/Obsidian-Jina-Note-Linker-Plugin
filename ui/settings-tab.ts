@@ -119,10 +119,23 @@ export class JinaLinkerSettingTab extends PluginSettingTab {
 
         new Setting(containerEl)
             .setClass('jina-settings-block')
-            .setName('排除的文件模式')
-            .setDesc('Python 脚本处理时要排除的文件名 Glob 模式 (半角逗号分隔)。')
+            .setName('排除的文件夹')
+            .setDesc('Python 脚本处理时要排除的文件夹 (半角逗号分隔)。支持两种格式：单一文件夹名(如"Scripts")和完整路径(如"20_巴别塔/音乐")。')
             .addText(text => text
-                .setPlaceholder('例如：*.excalidraw, draft-*.md, ZK_*')
+                .setPlaceholder('例如：.obsidian, Scripts, 20_巴别塔/音乐')
+                .setValue(this.plugin.settings.excludedFolders)
+                .onChange(async (value) => {
+                    this.plugin.settings.excludedFolders = value;
+                    await this.plugin.saveSettings();
+                })
+            );
+
+        new Setting(containerEl)
+            .setClass('jina-settings-block')
+            .setName('排除的文件模式')
+            .setDesc('要排除的文件模式 (半角逗号分隔)。支持两种格式：纯文件名模式(如"*.excalidraw")和路径模式(如"20_巴别塔/音乐/*.md")。')
+            .addText(text => text
+                .setPlaceholder('例如：*.excalidraw, template*.md, 20_巴别塔/音乐/*.md')
                 .setValue(this.plugin.settings.excludedFilesPatterns)
                 .onChange(async (value) => {
                     this.plugin.settings.excludedFilesPatterns = value;
@@ -349,29 +362,18 @@ export class JinaLinkerSettingTab extends PluginSettingTab {
                 }));
         
         // ------------------- AI 标签生成 -------------------
-        containerEl.createEl('div', { cls: 'jina-settings-section', text: '' }).innerHTML = '<div class="jina-settings-section-title">AI 标签生成</div>';
-
-        // 已移除“标签生成模式”设置，由弹窗选择生成
-
-        new Setting(containerEl)
-            .setClass('jina-settings-block')
-            .setName('每篇笔记最多标签数')
-            .addText(t=> t
-                .setPlaceholder('5')
-                .setValue(String(this.plugin.settings.maxTagsPerNote))
-                .onChange(async v=>{ this.plugin.settings.maxTagsPerNote = parseInt(v)||5; await this.plugin.saveSettings(); })
-            );
-
+        containerEl.createEl('div', { cls: 'jina-settings-section', text: '' }).innerHTML = '<div class="jina-settings-section-title">AI 标签生成设置</div>';
+        
         new Setting(containerEl)
             .setClass('jina-settings-block')
             .setName('使用自定义标签提示词')
-            .setDesc('启用后将使用下方自定义的标签提示词，而非默认提示词。')
-            .addToggle(tg => tg
+            .setDesc('启用后将使用下方自定义的标签提示词，而非默认提示词。注意：系统将自动添加格式要求和结尾提示，以确保输出符合预期格式。')
+            .addToggle(toggle => toggle
                 .setValue(this.plugin.settings.useCustomTagPrompt)
-                .onChange(async v => {
-                    this.plugin.settings.useCustomTagPrompt = v;
+                .onChange(async (value) => {
+                    this.plugin.settings.useCustomTagPrompt = value;
                     await this.plugin.saveSettings();
-                    this.display(); // 重新渲染
+                    this.display(); // 重新渲染设置页面
                 }));
 
         // 自定义标签提示词文本框
@@ -532,7 +534,7 @@ export class JinaLinkerSettingTab extends PluginSettingTab {
             case 'claude':
                 return ['claude-4-opus', 'claude-3.7-sonnet'];
             case 'gemini':
-                return ['gemini-20.5 flash', 'gemini-2.5-pro'];
+                return ['gemini-2.5 flash', 'gemini-2.5-pro'];
             default:
                 return [];
         }

@@ -22,5 +22,6 @@ node_modules/
 
 # 开发环境
 .vscode/
-构思.md
-流程.md
+
+#测试
+test-scr

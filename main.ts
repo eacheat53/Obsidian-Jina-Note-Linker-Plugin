@@ -188,10 +188,10 @@ export default class JinaLinkerPlugin extends Plugin {
                     
                     if (insertResult.success) {
                         const { processedFiles, updatedFiles } = insertResult.data!;
-                        // 标签插入
-                        await this.tagManager.insertAIGeneratedTagsIntoNotes(options.scanPath);
+                        // 删除标签插入代码，使功能独立
+                        // await this.tagManager.insertAIGeneratedTagsIntoNotes(options.scanPath);
 
-                        progressModal.setCompleted(`✅ 处理完成！检查了 ${processedFiles} 个文件，更新了 ${updatedFiles} 个文件`);
+                        progressModal.setCompleted(`✅ 链接插入完成！检查了 ${processedFiles} 个文件，插入链接到 ${updatedFiles} 个文件`);
                         
                         // 显示性能统计
                         const metrics = this.performanceMonitor.getMetricsSummary();

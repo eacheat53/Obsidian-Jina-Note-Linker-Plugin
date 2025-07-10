@@ -120,15 +120,18 @@ def build_ai_batch_request(
                 content_pairs_text += pair_text
                 total_length += pair_length
             
+            # 修复DeepSeek请求格式，确保符合API规范
+            system_prompt = "你是善于发现内容关联的评分专家。请按顺序为每对内容提供0-10的整数评分。"
+            user_prompt = f"{scoring_guide}\n\n以下是需要评分的多对内容，请按顺序为每对内容提供一个0-10的整数评分，用逗号分隔每个分数。\n\n{content_pairs_text}\n请回复格式为：'分数1,分数2,分数3...'（仅包含数字和逗号，不要有其他文字）"
+            
             batch_request = {
                 "model": model_name,
                 "messages": [
-                    {"role": "system", "content": "你是善于发现内容关联的评分专家。请按顺序为每对内容提供0-10的整数评分。"},
-                    {"role": "user", "content": f"{scoring_guide}\n\n以下是需要评分的多对内容，请按顺序为每对内容提供一个0-10的整数评分，用逗号分隔每个分数。\n\n{content_pairs_text}\n请回复格式为：'分数1,分数2,分数3...'（仅包含数字和逗号，不要有其他文字）"}
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
                 ],
-                "max_tokens": 100,
-                "temperature": 1.0,
-                "top_p": 0.8,
+                "max_tokens": 5000,
+                "temperature": 0.7,
             }
             return [batch_request], headers, api_url
         
@@ -166,8 +169,8 @@ def build_ai_batch_request(
                     {"role": "system", "content": "你是善于发现内容关联的评分专家。请按顺序为每对内容提供0-10的整数评分。"},
                     {"role": "user", "content": f"{scoring_guide}\n\n以下是需要评分的多对内容，请按顺序为每对内容提供一个0-10的整数评分，用逗号分隔每个分数。\n\n{content_pairs_text}\n请回复格式为：'分数1,分数2,分数3...'（仅包含数字和逗号，不要有其他文字）"}
                 ],
-                "max_tokens": 100,
-                "temperature": 1.0,
+                "max_tokens": 10000,
+                "temperature": 0.7,
             }
             return [batch_request], headers, api_url
             
@@ -205,12 +208,12 @@ def build_ai_batch_request(
             
             batch_request = {
                 "model": model_name,
-                "max_tokens": 100,
+                "max_tokens": 10000,
                 "system": "你是善于发现内容关联的评分专家。请按顺序为每对内容提供0-10的整数评分，用逗号分隔，不要有多余文字。",
                 "messages": [
                     {"role": "user", "content": f"{scoring_guide}\n\n以下是需要评分的多对内容，请按顺序为每对内容提供一个0-10的整数评分，用逗号分隔每个分数。\n\n{content_pairs_text}\n请回复格式为：'分数1,分数2,分数3...'（仅包含数字和逗号，不要有其他文字）"}
                 ],
-                "temperature": 0,
+                "temperature": 0.7,
             }
             return [batch_request], headers, api_url
             
@@ -242,17 +245,26 @@ def build_ai_batch_request(
                 content_pairs_text += pair_text
                 total_length += pair_length
             
+            # 修改Gemini请求格式，明确指示输出数字
+            system_prompt = "你是一位善于发现内容关联的评分专家，需要对内容对进行0-10分评分。只回复逗号分隔的数字，不要有其他文字。"
+            user_prompt = f"{scoring_guide}\n\n以下是需要评分的多对内容，请按顺序为每对内容提供一个0-10的整数评分。\n\n{content_pairs_text}\n请直接回复逗号分隔的数字序列，例如：'8,6,9,3,7'，不要有任何额外文字或标点符号。"
+            
             batch_request = {
                 "contents": [
                     {
+                        "role": "user",
                         "parts": [
                             {
-                                "text": f"作为善于发现内容关联的评分专家，{scoring_guide}\n\n以下是需要评分的多对内容，请按顺序为每对内容提供一个0-10的整数评分，用逗号分隔每个分数。\n\n{content_pairs_text}\n请回复格式为：'分数1,分数2,分数3...'（仅包含数字和逗号，不要有其他文字）"
+                                "text": user_prompt
                             }
                         ]
                     }
                 ],
-                "generationConfig": {"temperature": 0, "maxOutputTokens": 100},
+                "systemInstruction": {
+                    "role": "system",
+                    "parts": [{"text": system_prompt}]
+                },
+                "generationConfig": {"temperature": 0.7, "maxOutputTokens": 5000},
             }
             return [batch_request], headers, api_url_root
             
@@ -401,9 +413,20 @@ def parse_ai_batch_response(
             # 获取批量评分返回的内容
             content = ""
             if response_data["candidates"]:
-                parts = response_data["candidates"][0].get("content", {}).get("parts", [])
-                if parts and "text" in parts[0]:
-                    content = parts[0]["text"]
+                candidate = response_data["candidates"][0]
+                content_obj = candidate.get("content", {})
+                
+                # 新格式: candidates[0].content.text 直接包含文本
+                if "text" in content_obj:
+                    content = content_obj["text"]
+                # 新格式: candidates[0].text 直接包含文本
+                elif "text" in candidate:
+                    content = candidate["text"]
+                # 旧格式: candidates[0].content.parts[0].text
+                elif "parts" in content_obj:
+                    parts = content_obj.get("parts", [])
+                    if parts and "text" in parts[0]:
+                        content = parts[0]["text"]
                     
             # 解析逗号分隔的分数
             scores = extract_scores_from_text(content, len(prompt_pairs))
@@ -483,17 +506,49 @@ def extract_scores_from_text(text: str, expected_count: int) -> List[int | None]
         列表，包含提取出的整数评分，如果某项无法提取则为None
     """
     scores = []
+    
+    # 首先尝试最简单的情况：文本就是逗号分隔的数字列表
+    clean_text = text.strip().replace(" ", "")
+    if re.match(r'^(\d+,)*\d+$', clean_text):
+        try:
+            # 直接分割并转换为整数
+            for num_str in clean_text.split(','):
+                num = int(num_str)
+                if 0 <= num <= 10:
+                    scores.append(num)
+                else:
+                    scores.append(0)  # 超出范围的数字设为0
+            
+            # 如果找到的分数达到预期，直接返回
+            if len(scores) == expected_count:
+                return scores
+        except ValueError:
+            # 如果有任何转换错误，继续使用正则表达式方法
+            pass
+    
+    # 如果简单方法失败，使用更强大的正则表达式
     try:
-        # 使用正则表达式查找所有0-10之间的独立数字
-        # \b 是单词边界，确保我们匹配的是独立的数字，例如 "10" 而不是 "100" 的一部分
-        # (10|[0-9]) 确保先匹配 "10" 再匹配个位数字，防止 "10" 被拆成 "1" 和 "0"
+        # 改进正则表达式以匹配数字
+        # 匹配模式:
+        # 1. 独立的数字 (使用\b边界)
+        # 2. 特别优先匹配10 (因为它是两位数)
+        # 3. 然后匹配0-9的单个数字
         scores_matches = re.findall(r'\b(10|[0-9])\b', text)
+        
+        # 补充尝试匹配逗号分隔的形式
+        if not scores_matches:
+            comma_matches = re.findall(r'(\d+)(?:,|$)', text)
+            if comma_matches:
+                scores_matches = comma_matches
         
         for match in scores_matches:
             try:
                 score = int(match)
                 if 0 <= score <= 10:
                     scores.append(score)
+                else:
+                    scores.append(0)  # 超出范围的数字设为0
+                    
                 # 如果已经找到预期数量的分数，就提前停止
                 if len(scores) == expected_count:
                     break
@@ -502,12 +557,13 @@ def extract_scores_from_text(text: str, expected_count: int) -> List[int | None]
                 
     except Exception as e:
         logger.error(f"从文本中提取分数时出错: '{text}'. 错误: {e}")
-        # 失败时，返回一个包含 None 的列表
-        return [None] * expected_count
+        # 失败时，返回一个包含0的列表（而不是None）
+        return [0] * expected_count
 
-    # 如果找到的分数不足，用 None 填充剩余部分
+    # 如果找到的分数不足，用0填充剩余部分（而不是None）
     while len(scores) < expected_count:
-        scores.append(None)
+        scores.append(0)
+
     
     # 确保返回的列表长度不超过预期数量
     return scores[:expected_count]

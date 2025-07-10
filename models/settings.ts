@@ -105,7 +105,7 @@ export const DEFAULT_SETTINGS: JinaLinkerSettings = {
     aiModels: { ...DEFAULT_AI_MODELS },
     selectedAIProvider: 'deepseek',
     similarityThreshold: 0.70,
-    excludedFolders: '.obsidian, Scripts, assets, Excalidraw, .trash, ',
+    excludedFolders: '.obsidian, Scripts, assets, Excalidraw, .trash, Python-Templater-Plugin-Output, 20_巴别塔/音乐',
     excludedFilesPatterns: '*excalidraw*, template*.md, *.kanban.md, ^moc$, ^index$',
     defaultScanPath: '/',
     jinaModelName: 'jina-embeddings-v3',

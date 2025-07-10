@@ -71,12 +71,34 @@ def call_ai_api_batch_for_relevance(
                 time.sleep(AI_API_REQUEST_DELAY_SECONDS)
                 logger.debug("正在调用 %s (%s/%s)…", ai_provider, attempt + 1, max_retries)
 
+                # 打印请求详情用于调试（脱敏API密钥）
+                log_req_data = req_data.copy() if isinstance(req_data, dict) else req_data
+                log_headers = {k: ("***" if k.lower() in ["authorization", "x-api-key"] else v) for k, v in headers.items()}
+                logger.debug(f"请求URL: {api_url}")
+                logger.debug(f"请求头: {json.dumps(log_headers)}")
+                logger.debug(f"请求体(简要): {str(log_req_data)[:200]}...")
+
                 # gemini 需要拼接 key 到 URL
                 if ai_provider == "gemini":
                     full_url = f"{api_url}/{model_name}:generateContent?key={api_key}"
                     response = requests.post(full_url, headers=headers, json=req_data, timeout=60)
                 else:
                     response = requests.post(api_url, headers=headers, json=req_data, timeout=60)
+                
+                # 提供更详细的HTTP状态信息
+                logger.debug(f"HTTP状态码: {response.status_code}")
+                
+                if response.status_code != 200:
+                    error_detail = response.text[:500]  # 限制错误详情的长度
+                    logger.error(f"{ai_provider} API返回错误 ({response.status_code}): {error_detail}")
+                    
+                    # 特别处理DeepSeek的错误信息
+                    if ai_provider == "deepseek" and response.status_code == 400:
+                        try:
+                            error_json = response.json()
+                            logger.error(f"DeepSeek错误详情: {json.dumps(error_json)}")
+                        except:
+                            pass
                 
                 response.raise_for_status()
                 

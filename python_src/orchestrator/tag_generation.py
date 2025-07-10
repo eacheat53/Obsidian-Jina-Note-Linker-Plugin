@@ -78,11 +78,14 @@ def build_tag_batch_request(
         notes_text += note_block
         total_length += len(note_block)
 
+    # 无论是默认提示词还是自定义提示词，都添加固定的格式要求和结尾提示
+    fixed_ending = "请严格按要求输出，不要输出多余的任何解释！"
+    
     # 生成请求体
     system_prompt = "你是一位善于提炼知识标签的专家。"
     user_prompt = (
         f"{prompt_template}\n\n以下是待生成标签的多篇笔记，请保持顺序，一行输出一篇笔记的标签：\n\n{notes_text}\n" +
-        "请严格按要求输出，不要输出多余的任何解释！"
+        f"{fixed_ending}"
     )
 
     if ai_provider in {"openai", "deepseek", "custom"}:
@@ -100,7 +103,7 @@ def build_tag_batch_request(
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            "max_tokens": 1000,
+            "max_tokens": 5000,
             "temperature": 1.0,
         }
         return batch_request, headers, api_url
@@ -114,7 +117,7 @@ def build_tag_batch_request(
         api_url = DEFAULT_AI_CONFIGS["claude"]["api_url"]
         batch_request = {
             "model": model_name,
-            "max_tokens": 1000,
+            "max_tokens": 5000,
             "system": system_prompt,
             "messages": [{"role": "user", "content": user_prompt}],
             "temperature": 1.0,
@@ -127,14 +130,19 @@ def build_tag_batch_request(
         batch_request = {
             "contents": [
                 {
+                    "role": "user",
                     "parts": [
                         {
-                            "text": f"{system_prompt}\n{user_prompt}"
+                            "text": user_prompt
                         }
                     ]
                 }
             ],
-            "generationConfig": {"temperature": 1.0, "maxOutputTokens": 1000},
+            "systemInstruction": {
+                "role": "system",
+                "parts": [{"text": system_prompt}]
+            },
+            "generationConfig": {"temperature": 0.2, "maxOutputTokens": 5000},
         }
         return batch_request, headers, api_url_root
 
@@ -155,9 +163,22 @@ def parse_tag_batch_response(ai_provider: str, response_data: Dict | List):
         content = response_data.get("content", [{}])[0].get("text", "") if response_data else ""
     elif ai_provider == "gemini":
         if response_data.get("candidates"):
-            parts = response_data["candidates"][0].get("content", {}).get("parts", [])
-            if parts and "text" in parts[0]:
-                content = parts[0]["text"]
+            # 处理新旧两种格式的Gemini API响应
+            candidate = response_data["candidates"][0]
+            content_obj = candidate.get("content", {})
+            
+            # 新格式: candidates[0].content.text 直接包含文本
+            if "text" in content_obj:
+                content = content_obj["text"]
+            # 新格式: candidates[0].text 直接包含文本
+            elif "text" in candidate:
+                content = candidate["text"]
+            # 旧格式: candidates[0].content.parts[0].text
+            elif "parts" in content_obj:
+                parts = content_obj.get("parts", [])
+                if parts and "text" in parts[0]:
+                    content = parts[0]["text"]
+    
     return content.strip()
 
 
