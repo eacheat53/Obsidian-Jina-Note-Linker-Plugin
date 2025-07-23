@@ -3,10 +3,10 @@ import { TFile } from 'obsidian';
 export class CacheManager {
     private fileContentCache = new Map<string, {content: string, mtime: number}>();
     
-    async getCachedFileContent(file: TFile, vault: any): Promise<string> {
+    async getCachedFileContent(file: TFile, vault: any, forceRefresh: boolean = false): Promise<string> {
         const mtime = file.stat.mtime;
         const cached = this.fileContentCache.get(file.path);
-        if (cached && cached.mtime === mtime) {
+        if (!forceRefresh && cached && cached.mtime === mtime) {
             return cached.content;
         }
         const content = await vault.read(file);

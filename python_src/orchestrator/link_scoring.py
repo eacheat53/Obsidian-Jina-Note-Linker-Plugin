@@ -34,11 +34,12 @@ def score_candidates(
 ) -> None:
     """对候选链接对进行 AI 评分并将结果写入 SQLite。
     
+    注意：此函数依赖于嵌入处理的结果生成的候选对，必须在执行嵌入处理后调用。
+    
     Args:
-        candidate_pairs: 候选链接对列表
+        candidate_pairs: 候选链接对列表（基于嵌入相似度生成）
         project_root_abs: 项目根目录绝对路径
-        embeddings_db_path: 嵌入数据库路径
-        ai_scores_db_path: AI 评分数据库路径
+        main_db_path: 主数据库路径
         ai_provider: AI 提供商名称
         ai_api_url: AI API URL
         ai_api_key: AI API 密钥
@@ -55,7 +56,11 @@ def score_candidates(
     """
 
     if not candidate_pairs:
-        logger.info("没有候选链接对需要评分。")
+        logger.warning("没有候选链接对需要评分！")
+        logger.warning("这可能是因为：")
+        logger.warning("1. 嵌入数据不足（笔记数量太少）")
+        logger.warning("2. 相似度阈值设置过高")
+        logger.warning("3. 嵌入处理未正确执行")
         return
 
     conn = get_db_connection(main_db_path)
@@ -107,7 +112,10 @@ def score_candidates(
     # 按批处理
     for batch_start in range(0, len(valid_pairs), ai_scoring_batch_size):
         batch_pairs = valid_pairs[batch_start : batch_start + ai_scoring_batch_size]
-        logger.info("AI 评分批次 %s-%s/%s", batch_start + 1, batch_start + len(batch_pairs), len(valid_pairs))
+        # 减少日志输出频率，只在10%进度间隔输出
+        progress_percent = int((batch_start / len(valid_pairs)) * 100)
+        if progress_percent % 10 == 0 and (batch_start == 0 or (batch_start > 0 and int(((batch_start - ai_scoring_batch_size) / len(valid_pairs)) * 100) < progress_percent)):
+            logger.info("AI评分进度: %s/%s (完成%d%%)", batch_start + 1, len(valid_pairs), progress_percent)
 
         # 构造 prompt_pairs
         prompt_pairs: List[Dict] = []

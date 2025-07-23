@@ -1,4 +1,4 @@
-import { App, Notice, Plugin, TFile, Menu, normalizePath } from 'obsidian';
+import { App, Notice, Plugin, TFile, Menu, normalizePath, parseYaml, stringifyYaml } from 'obsidian';
 import { JinaLinkerSettings, DEFAULT_SETTINGS } from './models/settings';
 import { PerformanceMonitor } from './utils/performance-monitor';
 import { CacheManager } from './utils/cache-manager';
@@ -16,6 +16,8 @@ import { log } from './utils/error-handler';
 import { DEFAULT_AI_MODELS } from './models/constants';
 import { AIProvider, RunOptions } from './models/interfaces';
 import { NotificationService } from './utils/notification-service';
+// 导入crypto用于生成UUID
+import * as crypto from 'crypto';
 
 export default class JinaLinkerPlugin extends Plugin {
     settings: JinaLinkerSettings;
@@ -48,6 +50,19 @@ export default class JinaLinkerPlugin extends Plugin {
         // 首次使用不再执行旧 JSON→SQLite 迁移逻辑
 
         console.log('✅ 性能监控器和服务初始化完成');
+        
+        // 监听文件创建事件，为新文件添加唯一ID
+        this.registerEvent(
+            this.app.vault.on('create', async (file) => {
+                if (file instanceof TFile && file.extension === 'md') {
+                    // 延迟一小段时间再处理，确保文件内容已完全写入
+                    setTimeout(async () => {
+                        await this.ensureUniqueNoteId(file);
+                    }, 500);
+                }
+            })
+        );
+        
         console.log('🎉 Jina AI Linker 插件加载完成！');
 
         // 添加命令和功能
@@ -75,7 +90,7 @@ export default class JinaLinkerPlugin extends Plugin {
             }
         });
 
-        // 已移除“更新嵌入数据中的笔记哈希值”命令（数据库架构自动处理哈希同步）
+        // 已移除"更新嵌入数据中的笔记哈希值"命令（数据库架构自动处理哈希同步）
 
         this.addCommand({
             id: 'add-hash-boundary-markers',
@@ -103,6 +118,29 @@ export default class JinaLinkerPlugin extends Plugin {
                 new AddAiTagsModal(this.app, this, (paths: string, mode: 'smart'|'force') => {
                     this.runTagOnlyFlow(paths, mode);
                 }).open();
+            }
+        });
+        
+        // ---- 新增：确保当前文件有唯一ID ----
+        this.addCommand({
+            id: 'ensure-unique-note-id',
+            name: '为当前笔记生成唯一ID',
+            checkCallback: (checking: boolean) => {
+                const activeFile = this.app.workspace.getActiveFile();
+                if (activeFile && activeFile.extension === 'md') {
+                    if (!checking) {
+                        this.ensureUniqueNoteId(activeFile)
+                            .then(() => {
+                                this.notificationService.showNotice('✅ 已为当前笔记添加/更新唯一ID');
+                            })
+                            .catch(err => {
+                                this.notificationService.showError('❌ 添加/更新ID失败');
+                                log('error', '手动添加note_id失败', err);
+                            });
+                    }
+                    return true;
+                }
+                return false;
             }
         });
 
@@ -172,6 +210,11 @@ export default class JinaLinkerPlugin extends Plugin {
             progressModal.open();
             
             try {
+                // 临时保存原始标签模式
+                const originalTagsMode = this.settings.tagsMode;
+                // 确保在执行AI评分功能时不执行标签生成
+                this.settings.tagsMode = 'skip';
+
                 // 第一阶段：运行Python脚本
                 progressModal.updateProgress(0, 2, '正在运行Python脚本', '生成嵌入数据和AI评分...');
                 const result = await this.pythonBridge.runPythonScript(
@@ -180,6 +223,9 @@ export default class JinaLinkerPlugin extends Plugin {
                     this.manifest.dir || '',
                     (this.app.vault.adapter as any).getBasePath()
                 );
+                
+                // 恢复原始标签模式
+                this.settings.tagsMode = originalTagsMode;
                 
                 if (result.success) {
                     // 第二阶段：插入链接
@@ -225,7 +271,7 @@ export default class JinaLinkerPlugin extends Plugin {
             progress.updateProgress(0, 2, '运行后端', '生成 AI 标签…');
             const pyRes = await this.pythonBridge.runPythonScript(
                 targetPaths || '/',
-                'skip', // 评分跳过
+                'skip', // 评分跳过 - 确保运行标签功能时不执行AI评分，虽然依然会进行嵌入处理（必要的前置步骤）
                 this.manifest.dir || '',
                 (this.app.vault.adapter as any).getBasePath()
             );
@@ -318,5 +364,95 @@ export default class JinaLinkerPlugin extends Plugin {
     clearCache(): void {
         this.cacheManager.clearCache();
         this.notificationService.showNotice('🧹 缓存已清理', 2000);
+    }
+
+    // 确保笔记有一个唯一的note_id
+    private async ensureUniqueNoteId(file: TFile): Promise<void> {
+        try {
+            // 读取文件内容
+            const content = await this.app.vault.read(file);
+            
+            // 解析frontmatter - 更精确的regex匹配
+            const fmRegex = /^---\s*?\n([\s\S]*?)\n---\s*?\n/;
+            const fmMatch = content.match(fmRegex);
+            
+            if (!fmMatch) {
+                // 没有frontmatter，添加一个带note_id的frontmatter
+                const noteId = this.generateUniqueId();
+                const newContent = `---\nnote_id: ${noteId}\n---\n\n${content}`;
+                await this.app.vault.modify(file, newContent);
+                log('info', `为新文件 ${file.path} 添加了frontmatter和note_id: ${noteId}`);
+                return;
+            }
+            
+            // 提取frontmatter部分和其他内容
+            const fullFmMatch = fmMatch[0];  // 包括分隔符的完整frontmatter
+            const fmContent = fmMatch[1];    // 仅frontmatter内容(不含---)
+            const contentAfterFm = content.slice(fullFmMatch.length);
+            
+            try {
+                // 使用Obsidian的parseYaml解析frontmatter
+                const fmData = parseYaml(fmContent) || {};
+                
+                // 检查是否已有note_id
+                if (!fmData.note_id) {
+                    // 添加note_id
+                    fmData.note_id = this.generateUniqueId();
+                    
+                    // 使用stringifyYaml生成新的frontmatter
+                    const newFmContent = stringifyYaml(fmData);
+                    const newContent = `---\n${newFmContent}---\n${contentAfterFm}`;
+                    
+                    await this.app.vault.modify(file, newContent);
+                    log('info', `为新文件 ${file.path} 添加了note_id: ${fmData.note_id}`);
+                } else if (typeof fmData.note_id === 'string' && this.isTemplateId(fmData.note_id)) {
+                    // 如果现有ID是模板生成的(例如有特定前缀或格式特征)，则替换它
+                    const oldId = fmData.note_id;
+                    fmData.note_id = this.generateUniqueId();
+                    
+                    // 使用stringifyYaml生成新的frontmatter
+                    const newFmContent = stringifyYaml(fmData);
+                    const newContent = `---\n${newFmContent}---\n${contentAfterFm}`;
+                    
+                    await this.app.vault.modify(file, newContent);
+                    log('info', `为文件 ${file.path} 替换了模板ID ${oldId} 为新ID: ${fmData.note_id}`);
+                }
+                
+            } catch (yamlError) {
+                // YAML解析错误处理
+                log('error', `解析文件 ${file.path} 的frontmatter时出错`, yamlError);
+                
+                // 尝试使用简单的方式处理
+                if (!fmContent.includes('note_id:')) {
+                    const noteId = this.generateUniqueId();
+                    const newFmContent = fmContent.trim() + `\nnote_id: ${noteId}`;
+                    const newContent = content.replace(fmContent, newFmContent);
+                    await this.app.vault.modify(file, newContent);
+                    log('info', `使用简单处理为文件 ${file.path} 添加了note_id: ${noteId}`);
+                }
+            }
+        } catch (error) {
+            log('error', `处理文件 ${file.path} 的note_id时出错`, error);
+            this.notificationService.showError(`为文件 ${file.path} 添加ID时出错`);
+        }
+    }
+    
+    // 检查ID是否为模板生成的ID
+    private isTemplateId(id: string): boolean {
+        // 以下条件可根据实际情况调整
+        return id.includes('template') || 
+               id === '00000000-0000-0000-0000-000000000000' ||
+               id.match(/^[a-f0-9]{8}-?[a-f0-9]{4}-?[a-f0-9]{4}-?[a-f0-9]{4}-?[a-f0-9]{12}$/) === null;
+    }
+    
+    // 生成唯一ID
+    private generateUniqueId(): string {
+        try {
+            return crypto.randomUUID();
+        } catch (e) {
+            // 备用方案，生成一个简化的UUID格式
+            const random = () => Math.floor(Math.random() * 1e10).toString(16);
+            return `${random()}-${random()}-${random()}-${random()}`;
+        }
     }
 }

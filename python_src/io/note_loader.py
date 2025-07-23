@@ -79,9 +79,21 @@ def list_markdown_files(
        - 路径模式: 如 "20_巴别塔/音乐/*.md" (包含路径分隔符)
     
     当使用路径模式时，匹配检查的是完整的相对路径。
+    
+    新增: 支持单个文件路径作为输入，而不仅仅是文件夹。
     """
     excluded_folders = excluded_folders or []
     excluded_files_patterns = excluded_files_patterns or []
+    
+    # 检查是否为文件路径
+    if os.path.isfile(scan_directory_abs):
+        # 如果输入是文件而不是目录，直接返回该文件的相对路径
+        if scan_directory_abs.lower().endswith('.md'):
+            rel_path = os.path.relpath(scan_directory_abs, project_root_abs).replace(os.sep, "/")
+            return [rel_path]
+        else:
+            logger.warning("提供的路径是文件但不是Markdown文件: %s", scan_directory_abs)
+            return []
     
     # 处理排除文件夹：支持完整路径和单独文件夹名
     simple_folders = []  # 单一文件夹名
@@ -98,7 +110,7 @@ def list_markdown_files(
                 simple_folders.append(ef)
     
     if not os.path.isdir(scan_directory_abs):
-        logger.error("扫描路径 %s 不是有效文件夹。", scan_directory_abs)
+        logger.error("扫描路径 %s 不是有效文件夹或文件。", scan_directory_abs)
         return []
 
     # Compile glob patterns for file exclusion

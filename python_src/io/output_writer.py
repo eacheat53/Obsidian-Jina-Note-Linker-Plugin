@@ -13,6 +13,7 @@ from python_src.utils.logger import get_logger
 from python_src.config import (
     DEFAULT_MAIN_DB_FILE_NAME,
 )
+from python_src.hash_utils.hasher import HASH_BOUNDARY_MARKER
 
 logger = get_logger(__name__)
 
@@ -21,18 +22,57 @@ logger = get_logger(__name__)
 # ---------------------------------------------------------------------------
 
 def write_markdown_with_frontmatter(file_path: str, frontmatter: Dict, body: str) -> None:
-    """将 front-matter 与正文组合写入 Markdown 文件。"""
-    output = ""
-    if frontmatter:
-        fm_dump = yaml.dump(frontmatter, allow_unicode=True, default_flow_style=False, sort_keys=False)
-        output = f"---\n{fm_dump.strip()}\n---\n"
+    """将 front-matter 与正文组合写入 Markdown 文件，保留哈希边界标记后的内容。"""
+    try:
+        # 检查文件是否存在，如果存在则读取原内容，获取哈希边界后的内容
+        original_content = ""
+        original_post_boundary_content = ""
+        
+        if os.path.exists(file_path):
+            try:
+                original_content = Path(file_path).read_text(encoding="utf-8")
+                boundary_idx = original_content.find(HASH_BOUNDARY_MARKER)
+                
+                if boundary_idx != -1:
+                    # 保存哈希边界后的内容
+                    boundary_end_idx = boundary_idx + len(HASH_BOUNDARY_MARKER)
+                    original_post_boundary_content = original_content[boundary_end_idx:]
+                    logger.debug("已保存哈希边界标记后的内容用于保留")
+            except Exception as e:
+                logger.warning(f"读取原文件时出错: {e}, 将不保留边界后内容")
+        
+        # 构建新文件内容
+        output = ""
+        if frontmatter:
+            fm_dump = yaml.dump(frontmatter, allow_unicode=True, default_flow_style=False, sort_keys=False)
+            output = f"---\n{fm_dump.strip()}\n---\n"
 
-    # 防止正文首行空白
-    body_clean = body.lstrip("\n")
-    output += body_clean
-
-    path = Path(file_path)
-    path.write_text(output, encoding="utf-8")
+        # 防止正文首行空白
+        body_clean = body.lstrip("\n")
+        output += body_clean
+        
+        # 检查当前body是否已经包含哈希边界标记
+        if HASH_BOUNDARY_MARKER not in body:
+            # 如果body中没有哈希边界标记，但原文件中有，则添加标记和之后的内容
+            if original_post_boundary_content:
+                output = output.rstrip() + "\n\n" + HASH_BOUNDARY_MARKER + original_post_boundary_content
+        
+        path = Path(file_path)
+        path.write_text(output, encoding="utf-8")
+        logger.debug(f"写入文件 {file_path} 完成，已保留哈希边界后内容")
+        
+    except Exception as e:
+        logger.error(f"写入文件 {file_path} 时出错: {e}")
+        # 出错时仍尝试写入基本内容
+        try:
+            basic_output = ""
+            if frontmatter:
+                fm_dump = yaml.dump(frontmatter, allow_unicode=True, default_flow_style=False, sort_keys=False)
+                basic_output = f"---\n{fm_dump.strip()}\n---\n"
+            basic_output += body.lstrip("\n")
+            Path(file_path).write_text(basic_output, encoding="utf-8")
+        except:
+            logger.critical(f"写入文件 {file_path} 的基本内容也失败")
 
 
 # ---------------------------------------------------------------------------

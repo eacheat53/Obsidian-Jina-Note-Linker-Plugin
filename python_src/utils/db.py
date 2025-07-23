@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import sqlite3
 from typing import Dict, List, Tuple
+import re
 
 from python_src.utils.logger import get_logger
 
@@ -51,23 +52,10 @@ def check_table_exists(db_path: str, table_name: str) -> bool:
         count = cur.fetchone()[0]
         exists = count > 0
         
-        if exists:
-            logger.info(f"表 '{table_name}' 存在于数据库 {db_path}")
+        # 只保留最简单的日志，删除详细的表结构输出
+        if not exists:
+            logger.warning(f"表 '{table_name}' 不存在于数据库")
             
-            # 显示表结构
-            cur.execute(f"PRAGMA table_info({table_name})")
-            columns = cur.fetchall()
-            logger.info(f"表 '{table_name}' 结构:")
-            for col in columns:
-                logger.info(f"  - {col[1]} ({col[2]})")
-        else:
-            logger.warning(f"表 '{table_name}' 不存在于数据库 {db_path}")
-            
-            # 显示所有表
-            cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
-            tables = [row[0] for row in cur.fetchall()]
-            logger.info(f"数据库中的表: {', '.join(tables)}")
-        
         return exists
     except Exception as e:
         logger.error(f"检查表失败: {e}")
@@ -95,13 +83,47 @@ def list_database_tables(db_path: str) -> List[str]:
     try:
         cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
         tables = [row[0] for row in cur.fetchall()]
-        logger.info(f"数据库 {db_path} 包含以下表: {', '.join(tables)}")
+        # 简化日志输出，不输出详细的表名列表
+        logger.info(f"数据库包含 {len(tables)} 个表")
         return tables
     except Exception as e:
         logger.error(f"列出表失败: {e}")
         return []
     finally:
         conn.close()
+
+
+# 减少输出详细的表结构，只输出创建了哪些表，而不输出具体结构
+def ensure_tables_exist(conn: sqlite3.Connection, schema_scripts: List[str]) -> List[str]:
+    """确保必要的表存在，返回缺失的表列表。"""
+    cursor = conn.cursor()
+    
+    # 检查已存在的表
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    existing_tables = {row[0] for row in cursor.fetchall()}
+    
+    missing_tables = []
+    
+    for script in schema_scripts:
+        # 提取表名和CREATE TABLE语句
+        table_matches = re.findall(r"CREATE TABLE\s+(?:IF NOT EXISTS\s+)?(\w+)", script, re.IGNORECASE)
+        if not table_matches:
+            continue
+            
+        table_name = table_matches[0]
+        
+        if table_name not in existing_tables:
+            missing_tables.append(table_name)
+            
+            try:
+                cursor.executescript(script)
+                # 减少日志输出，不输出完整SQL语句
+                logger.debug("已创建表: %s", table_name)
+            except sqlite3.Error as e:
+                logger.error("创建表 %s 失败: %s", table_name, e)
+    
+    conn.commit()
+    return missing_tables
 
 
 __all__ = ["get_db_connection", "initialize_database", "check_table_exists", "list_database_tables"] 

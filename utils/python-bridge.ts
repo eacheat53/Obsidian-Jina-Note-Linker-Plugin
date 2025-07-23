@@ -96,6 +96,7 @@ export class PythonBridge {
                 // -------- AI 标签生成相关参数 --------
                 // tags_mode: force / smart / skip
                 args.push('--tags_mode', this.settings.tagsMode);
+                log('info', `标签模式: ${this.settings.tagsMode}`);
 
                 // 使用自定义标签提示词时沿用现有参数名 (复用 --custom_scoring_prompt 逻辑)
                 if (this.settings.useCustomTagPrompt) {

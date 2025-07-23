@@ -48,6 +48,7 @@ def process_and_embed_notes(
 
     embedded_count = 0
     processed_files_this_run = 0
+    skipped_files_count = 0
     all_files_data_for_return = files_data_from_db.copy()
 
     # 批处理
@@ -55,7 +56,10 @@ def process_and_embed_notes(
     batch_size = embedding_batch_size
     for batch_start in range(0, total_files, batch_size):
         batch_files = files_relative_to_project_root[batch_start : batch_start + batch_size]
-        logger.info("批量处理文件 %s-%s/%s", batch_start + 1, batch_start + len(batch_files), total_files)
+        # 减少输出频率，仅在完成10%进度时输出
+        progress_percent = int((batch_start / total_files) * 100)
+        if progress_percent % 10 == 0 and (batch_start == 0 or (batch_start > 0 and int(((batch_start - batch_size) / total_files) * 100) < progress_percent)):
+            logger.info("批量处理进度：%s/%s (完成%d%%)", batch_start + 1, total_files, progress_percent)
 
         batch_contents: List[str] = []
         batch_file_info: List[Dict] = []
@@ -107,7 +111,9 @@ def process_and_embed_notes(
                 and existing["hash"] == content_hash
                 and existing["embedding"] is not None
             ):
+                logger.debug("跳过文件 %s (哈希未变化，已有嵌入)", rel_path)
                 all_files_data_for_return[rel_path] = existing
+                skipped_files_count += 1
                 continue
 
             batch_contents.append(processed_content)
@@ -170,7 +176,8 @@ def process_and_embed_notes(
     conn.close()
 
     logger.info(
-        "嵌入完成：共处理 %s 文件，生成/更新 %s 嵌入。", processed_files_this_run, embedded_count
+        "嵌入完成：共检查 %s 文件，跳过 %s 文件（未变化），处理 %s 文件，生成/更新 %s 嵌入。", 
+        total_files, skipped_files_count, processed_files_this_run, embedded_count
     )
 
     return {

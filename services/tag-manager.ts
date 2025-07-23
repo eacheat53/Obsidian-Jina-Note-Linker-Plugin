@@ -2,6 +2,7 @@ import { App, Notice, TFile, parseYaml, stringifyYaml } from 'obsidian';
 import { JinaLinkerSettings } from '../models/settings';
 import { CacheManager } from '../utils/cache-manager';
 import { log } from '../utils/error-handler';
+import { HASH_BOUNDARY_MARKER } from '../models/constants';
 
 export class TagManager {
     constructor(private app: App, private settings: JinaLinkerSettings, private cacheManager: CacheManager) {}
@@ -32,6 +33,20 @@ export class TagManager {
             if(!tagsToInsert.length) continue;
 
             let content = await this.cacheManager.getCachedFileContent(file,this.app.vault);
+            
+            // 检查哈希边界标记位置，以便后续保留其后内容
+            const hashBoundaryIndex = content.indexOf(HASH_BOUNDARY_MARKER);
+            let contentAfterBoundary = '';
+            
+            if (hashBoundaryIndex !== -1) {
+                // 保存哈希边界标记及其后的所有内容
+                contentAfterBoundary = content.substring(hashBoundaryIndex);
+                // 截取只包含边界标记之前内容的部分
+                content = content.substring(0, hashBoundaryIndex);
+                // 删除此日志输出
+            }
+            
+            // 处理frontmatter
             const fmRegex = /^---\s*$[\s\S]*?^---\s*$\n?/m;
             let fm = '';
             if(fmRegex.test(content)){
@@ -45,11 +60,23 @@ export class TagManager {
             let tagsArr: string[] = Array.isArray((fmObj as any).tags)? (fmObj as any).tags: [];
             const beforeLen = tagsArr.length;
             for(const t of tagsToInsert){ if(!tagsArr.includes(t)) tagsArr.push(t); }
-            if(tagsArr.length===beforeLen) { processed++; continue; }
+            if(tagsArr.length===beforeLen) { 
+                processed++; 
+                continue; 
+            }
             (fmObj as any).tags = tagsArr;
             const newFm = `---\n${stringifyYaml(fmObj).trim()}\n---\n`;
-            const newContent = newFm + body;
-            await this.app.vault.modify(file,newContent);
+            
+            // 拼接新内容，确保保留哈希边界及其后内容
+            let newContent = newFm + body;
+            
+            // 如果有哈希边界内容，添加回去
+            if (contentAfterBoundary) {
+                newContent = newContent.trimEnd() + '\n\n' + contentAfterBoundary;
+            }
+            
+            await this.app.vault.modify(file, newContent);
+            
             // 缓存简单替换
             // 无 updateCache 方法, 直接放入缓存Map
             (this.cacheManager as any).fileContentCache?.set(file.path,{content:newContent,mtime:file.stat.mtime});

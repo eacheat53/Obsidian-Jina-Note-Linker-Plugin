@@ -116,8 +116,8 @@ def main() -> None:  # pragma: no cover
     # 若数据库不存在则初始化结构
     initialize_database(main_db_path, MAIN_DB_SCHEMA)
 
-    # 列出表并确保最新结构
-    list_database_tables(main_db_path)
+    # 不再输出所有表结构
+    # list_database_tables(main_db_path)
 
     from python_src.utils.db import check_table_exists
     missing_tables = []
@@ -138,7 +138,7 @@ def main() -> None:  # pragma: no cover
 
     # 测试ai_responses表
     if args.test_ai_responses_db:
-        logger.info("测试ai_responses表...")
+        # 减少日志输出
         conn = get_db_connection(main_db_path)
         try:
             # 插入测试数据
@@ -152,37 +152,37 @@ def main() -> None:  # pragma: no cover
                 (test_batch_id, "test", "test-model", "测试请求内容", "测试响应内容", "default")
             )
             conn.commit()
-            logger.info("测试数据插入成功")
 
             # 查询测试数据
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM ai_responses WHERE batch_id = ?", (test_batch_id,))
             rows = cursor.fetchall()
             if rows:
-                logger.info(f"成功查询到测试数据: {rows}")
-
                 # 清理测试数据
                 conn.execute("DELETE FROM ai_responses WHERE batch_id = ?", (test_batch_id,))
                 conn.commit()
-                logger.info("测试数据已清理")
+                logger.info("测试ai_responses表成功")
             else:
-                logger.error("未能查询到刚插入的测试数据!")
+                logger.error("测试ai_responses表失败")
         except Exception as e:
             logger.error(f"测试ai_responses表失败: {e}")
-            import traceback
-            logger.error(f"详细错误: {traceback.format_exc()}")
         finally:
             conn.close()
-
-        # 验证测试完成后退出
-        logger.info("ai_responses表测试完成")
         return
 
-    scan_paths = (
-        [os.path.join(project_root_abs, p) for p in args.scan_target_folders]
-        if args.scan_target_folders
-        else [project_root_abs]
-    )
+    scan_paths = []
+    if args.scan_target_folders:
+        for p in args.scan_target_folders:
+            path = os.path.join(project_root_abs, p)
+            # 检查是否为文件或目录
+            if os.path.isfile(path):
+                # 如果是文件，直接添加
+                scan_paths.append(path)
+            else:
+                # 如果是目录，添加目录路径
+                scan_paths.append(path)
+    else:
+        scan_paths = [project_root_abs]
 
     # Scan markdown files
     markdown_files: list[str] = []
@@ -200,11 +200,15 @@ def main() -> None:  # pragma: no cover
         logger.warning("未找到任何 Markdown 文件，流程结束。")
         return
 
+    # ************ 修改开始 ************
+    # 1. 强制执行嵌入处理 - 这是所有功能的前置步骤
+    # 无论是标签生成还是AI评分，都需要先确保笔记已经嵌入并记录在数据库中
     embeddings_data = {
         "files": {}
     }
 
     if args.jina_api_key:
+        logger.info("开始执行嵌入处理（所有功能的前置步骤）...")
         embeddings_data = process_and_embed_notes(
             project_root_abs,
             markdown_files,
@@ -214,58 +218,82 @@ def main() -> None:  # pragma: no cover
             max_chars_for_jina_to_use=args.max_chars_for_jina,
             embedding_batch_size=args.embedding_batch_size,
         )
+        logger.info("嵌入处理完成，笔记已记录到数据库中")
     else:
-        logger.warning("未提供 Jina API Key, 跳过嵌入生成阶段。")
+        logger.error("必须提供 Jina API Key 才能执行嵌入处理。嵌入处理是所有功能（标签生成、AI评分）的前置步骤。")
+        logger.error("请设置 --jina_api_key 参数后重试。")
+        return
+    
+    # 2. 根据功能标志，选择性执行打分或标签生成功能
+    # 确保互相独立，不会交叉执行
 
-    # Candidate pairs
-    candidates = generate_candidate_pairs(embeddings_data, args.similarity_threshold) if embeddings_data.get("files") else []
-
-    if args.ai_api_key and args.ai_scoring_mode != "skip" and candidates:
-        score_candidates(
-            candidates,
-            project_root_abs,
-            main_db_path,
-            ai_provider=args.ai_provider,
-            ai_api_url=args.ai_api_url,
-            ai_api_key=args.ai_api_key,
-            ai_model_name=args.ai_model_name,
-            max_content_length_for_ai_to_use=args.max_content_length_for_ai,
-            force_rescore=(args.ai_scoring_mode == "force"),
-            ai_scoring_batch_size=args.ai_scoring_batch_size,
-            custom_scoring_prompt=args.custom_scoring_prompt,
-            use_custom_scoring_prompt=args.use_custom_scoring_prompt,
-            max_pairs_per_request=args.ai_scoring_batch_size,
-            max_chars_per_note=args.max_chars_per_note,
-            max_total_chars_per_request=args.max_total_chars_per_request,
-            save_api_responses=args.save_api_responses,
-        )
+    # 2.1 执行AI评分功能（如果启用）
+    if args.ai_api_key and args.ai_scoring_mode != "skip":
+        logger.info("开始AI评分流程...")
+        
+        # 生成候选链接对（用于AI评分）
+        candidates = generate_candidate_pairs(embeddings_data, args.similarity_threshold) if embeddings_data.get("files") else []
+        logger.info(f"基于嵌入相似度生成了 {len(candidates)} 个候选链接对")
+        
+        if candidates:
+            score_candidates(
+                candidates,
+                project_root_abs,
+                main_db_path,
+                ai_provider=args.ai_provider,
+                ai_api_url=args.ai_api_url,
+                ai_api_key=args.ai_api_key,
+                ai_model_name=args.ai_model_name,
+                max_content_length_for_ai_to_use=args.max_content_length_for_ai,
+                force_rescore=(args.ai_scoring_mode == "force"),
+                ai_scoring_batch_size=args.ai_scoring_batch_size,
+                custom_scoring_prompt=args.custom_scoring_prompt,
+                use_custom_scoring_prompt=args.use_custom_scoring_prompt,
+                max_pairs_per_request=args.ai_scoring_batch_size,
+                max_chars_per_note=args.max_chars_per_note,
+                max_total_chars_per_request=args.max_total_chars_per_request,
+                save_api_responses=args.save_api_responses,
+            )
+            logger.info("AI评分流程完成")
+        else:
+            logger.warning("没有足够的候选链接对，跳过AI评分流程")
     elif not args.ai_api_key:
         logger.warning("未提供 AI API Key, 跳过 AI 评分阶段。")
 
+    # 导出AI评分JSON（如果需要）
     if not args.no_export_json or args.export_json:
         export_ai_scores_to_json(project_root_abs, output_dir_abs, min_score=args.min_ai_score)
 
-    # 标签生成
+    # 2.2 AI标签生成阶段（如果启用）
     if args.tags_mode != "skip":
-        from python_src.orchestrator.tag_generation import generate_tags  # 局部导入避免循环
-        generate_tags(
-            project_root_abs,
-            main_db_path,
-            ai_provider=args.ai_provider,
-            ai_api_url=args.ai_api_url,
-            ai_api_key=args.ai_api_key,
-            ai_model_name=args.ai_model_name,
-            max_content_length_for_ai=args.max_content_length_for_ai,
-            force_regen=(args.tags_mode == "force"),
-            batch_size=args.ai_scoring_batch_size,
-            custom_prompt=args.custom_scoring_prompt,
-            use_custom_prompt=args.use_custom_scoring_prompt,
-            max_chars_per_note=args.max_chars_per_note,
-            max_total_chars_per_request=args.max_total_chars_per_request,
-            save_api_responses=args.save_api_responses,
-        )
+        if not args.ai_api_key:
+            logger.warning("未提供 AI API Key, 跳过标签生成阶段。")
+        else:
+            logger.info("开始AI标签生成阶段（模式：%s）...", args.tags_mode)
+            from python_src.orchestrator.tag_generation import generate_tags  # 局部导入避免循环
+            generate_tags(
+                project_root_abs,
+                main_db_path,
+                ai_provider=args.ai_provider,
+                ai_api_url=args.ai_api_url,
+                ai_api_key=args.ai_api_key,
+                ai_model_name=args.ai_model_name,
+                max_content_length_for_ai=args.max_content_length_for_ai,
+                force_regen=(args.tags_mode == "force"),
+                batch_size=args.ai_scoring_batch_size,
+                custom_prompt=args.custom_scoring_prompt,
+                use_custom_prompt=args.use_custom_scoring_prompt,
+                max_chars_per_note=args.max_chars_per_note,
+                max_total_chars_per_request=args.max_total_chars_per_request,
+                save_api_responses=args.save_api_responses,
+            )
+            logger.info("AI标签生成完成")
 
-        export_ai_tags_to_json(project_root_abs, output_dir_abs)
+            export_ai_tags_to_json(project_root_abs, output_dir_abs)
+            logger.info("标签数据已导出到JSON文件")
+    else:
+        logger.info("标签生成模式设置为跳过，已跳过标签生成阶段")
+    # ************ 修改结束 ************
 
     logger.info("流程完成，总耗时 %.2fs", time.time() - start_time)
 

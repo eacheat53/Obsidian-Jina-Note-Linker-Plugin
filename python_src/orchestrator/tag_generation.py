@@ -206,7 +206,7 @@ def call_ai_api_batch_for_tags(
         return []
 
     batch_id = str(uuid.uuid4())
-    logger.info("标签生成批次ID: %s", batch_id)
+    logger.info("开始批量标签生成...")
 
     for attempt in range(max_retries):
         try:
@@ -270,7 +270,11 @@ def generate_tags(
     max_total_chars_per_request: int | None = AI_SCORING_MAX_TOTAL_CHARS,
     save_api_responses: bool = True,
 ):
-    """Batch generate tags for notes and write into note_tags table."""
+    """为已嵌入的笔记生成 AI 标签并保存到数据库。
+    
+    注意：此函数依赖于嵌入处理的结果，必须在执行嵌入处理后调用。
+    支持处理单个笔记或批量处理多个笔记。
+    """
     conn = get_db_connection(main_db_path)
     cur = conn.cursor()
 
@@ -279,31 +283,48 @@ def generate_tags(
     all_notes = cur.fetchall()
 
     if not all_notes:
-        logger.info("无嵌入笔记可生成标签，提前结束")
+        logger.error("数据库中没有找到已嵌入的笔记！")
+        logger.error("请确保已完成嵌入处理，数据库中有有效的嵌入数据")
         conn.close()
         return
 
     if not force_regen:
-        # 过滤已有标签的笔记
+        # 智能模式：过滤已有标签的笔记
         cur.execute("SELECT DISTINCT note_id FROM note_tags")
         existing_ids = {row[0] for row in cur.fetchall()}
         to_process = [(nid, fp) for nid, fp in all_notes if nid not in existing_ids]
+        logger.info("智能模式：跳过已有标签的 %d 个笔记，待处理 %d 个笔记", 
+                   len(existing_ids), len(to_process))
     else:
+        # 强制模式：处理所有笔记
         to_process = all_notes
+        logger.info("强制模式：将为所有 %d 个笔记重新生成标签", len(to_process))
 
     if not to_process:
-        logger.info("没有需要生成标签的笔记")
+        logger.info("没有需要生成标签的笔记（所有笔记都已有标签）")
         conn.close()
         return
 
-    logger.info("开始 AI 标签生成，总笔记数: %s", len(to_process))
+    # 调整日志信息，支持单个或多个笔记
+    if len(to_process) == 1:
+        logger.info("开始为单个笔记生成 AI 标签")
+    else:
+        logger.info("开始 AI 标签生成，总笔记数: %s", len(to_process))
 
     prompt_template = custom_prompt if use_custom_prompt else DEFAULT_TAG_PROMPT
 
+    # 批量处理，减少日志输出频率
     for batch_start in range(0, len(to_process), batch_size):
-        batch = to_process[batch_start : batch_start + batch_size]
+        batch_end = min(batch_start + batch_size, len(to_process))
+        current_batch = to_process[batch_start:batch_end]
+        
+        # 仅在每10%进度时输出日志
+        progress_percent = int((batch_start / len(to_process)) * 100)
+        if progress_percent % 10 == 0 and (batch_start == 0 or (batch_start > 0 and int(((batch_start - batch_size) / len(to_process)) * 100) < progress_percent)):
+            logger.info("AI标签生成进度: %s/%s (完成%d%%)", batch_start + 1, len(to_process), progress_percent)
+
         prompt_notes: List[Dict] = []
-        for note_id, rel_path in batch:
+        for note_id, rel_path in current_batch:
             abs_path = os.path.join(project_root_abs, rel_path)
             try:
                 body, _, _ = read_markdown_with_frontmatter(abs_path)

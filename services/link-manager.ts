@@ -1,46 +1,70 @@
-import { App, Notice, TFile, Vault } from 'obsidian';
-import { OperationResult } from '../models/interfaces';
-import { 
-    DEFAULT_OUTPUT_DIR_IN_VAULT, 
-    HASH_BOUNDARY_MARKER,
-    LINKS_END_MARKER,
-    LINKS_START_MARKER, 
-    SUGGESTED_LINKS_TITLE
-} from '../models/constants';
+import { App, MetadataCache, Notice, TFile, Vault, normalizePath } from 'obsidian';
+import { HASH_BOUNDARY_MARKER, LINKS_END_MARKER, LINKS_START_MARKER, SUGGESTED_LINKS_TITLE } from '../models/constants';
 import { JinaLinkerSettings } from '../models/settings';
-import { FilePathUtils } from '../utils/path-utils';
-import { createProcessingError, log } from '../utils/error-handler';
+import { OperationResult } from '../models/interfaces';
 import { CacheManager } from '../utils/cache-manager';
-import * as path from 'path';
+import { createProcessingError, log } from '../utils/error-handler';
 import { NotificationService } from '../utils/notification-service';
 
-const MAX_AI_SCORE = 10;
-const MAX_JINA_SCORE = 1.0;
-
-// 计算链接插入位置的函数
+/**
+ * 查找在哪里插入建议链接
+ * - 如果存在 YAML frontmatter, 将链接放在其后
+ * - 否则放在文件开头
+ */
 function findLinkInsertionPosition(content: string): number {
-    const linkSectionStart = content.lastIndexOf(LINKS_START_MARKER);
-    const linkSectionEnd = content.lastIndexOf(LINKS_END_MARKER);
-    
-    if (linkSectionStart !== -1 && linkSectionEnd !== -1 && linkSectionStart < linkSectionEnd) {
-        // 已有链接区域，返回链接区域起始处
-        return linkSectionStart;
+    // 首先查找 frontmatter
+    const fmMatch = content.match(/^---\s*\n([\s\S]*?)\n^---\s*$/m);
+    if (fmMatch) {
+        // 如果有frontmatter，放在其后
+        return fmMatch[0].length;
     }
 
-    const hashBoundaryPos = content.lastIndexOf(HASH_BOUNDARY_MARKER);
+    // 找到正文第一行
+    const firstLineMatch = content.match(/^.*$/m);
+    if (firstLineMatch) {
+        return firstLineMatch[0].length;
+    }
+
+    // 否则直接放在开头
+    return 0;
+}
+
+/**
+ * 用于添加哈希边界标记的函数
+ * @param file 目标文件
+ * @param content 文件内容
+ * @returns 添加了边界标记的内容
+ */
+async function addHashBoundaryToFile(file: TFile, content: string): Promise<string> {
+    // 这里我们假设内容已经加载
+    if (content.includes(HASH_BOUNDARY_MARKER)) {
+        return content;
+    }
+
+    // 找到最后一个非空行
+    const lines = content.split(/\r?\n/);
+    let lastNonEmptyLineIndex = -1;
     
-    if (hashBoundaryPos !== -1) {
-        // 有哈希边界，在其后添加
-        return hashBoundaryPos + HASH_BOUNDARY_MARKER.length;
+    for (let i = lines.length - 1; i >= 0; i--) {
+        if (lines[i].trim().length > 0) {
+            lastNonEmptyLineIndex = i;
+            break;
+        }
+    }
+    
+    if (lastNonEmptyLineIndex !== -1) {
+        // 在最后一个非空行后插入哈希边界标记
+        lines.splice(lastNonEmptyLineIndex + 1, 0, '', HASH_BOUNDARY_MARKER);
+        return lines.join('\n');
     } else {
-        // 没有哈希边界，在文件末尾添加
-        return content.length;
+        // 如果没有非空行，直接添加
+        return content + '\n\n' + HASH_BOUNDARY_MARKER;
     }
 }
 
 export class LinkManager {
     private notificationService = NotificationService.getInstance();
-
+    
     constructor(
         private app: App, 
         private settings: JinaLinkerSettings,
@@ -48,99 +72,91 @@ export class LinkManager {
     ) {}
 
     async insertAISuggestedLinksIntoNotes(targetFoldersOption: string): Promise<OperationResult<{processedFiles: number, updatedFiles: number}>> {
-        log('info', '开始执行：插入AI建议链接');
-        log('info', `目标文件夹: ${targetFoldersOption}`);
-        
         try {
-            // 使用默认输出目录
-            const outputDirInVault = DEFAULT_OUTPUT_DIR_IN_VAULT;
-            const aiScoresFilePath = FilePathUtils.normalizePath(path.join(outputDirInVault, 'ai_scores.json'));
-
-            // 检查AI评分文件是否存在
-            const aiScoresFileExists = await this.app.vault.adapter.exists(aiScoresFilePath);
-            if (!aiScoresFileExists) {
-                const error = createProcessingError('FILE_NOT_FOUND',
-                    `AI评分文件 "${aiScoresFilePath}" 未找到`,
-                    '请先运行Python脚本生成AI评分数据');
-                return { success: false, error };
-            }
-
-            // 读取AI评分数据
-            const rawAiScoresData = await this.app.vault.adapter.read(aiScoresFilePath);
-            let aiScoresData: any;
+            log('info', '开始执行：插入AI建议链接');
+            log('info', `目标文件夹: ${targetFoldersOption}`);
             
-            try {
-                aiScoresData = JSON.parse(rawAiScoresData);
-            } catch (parseError: any) {
-                const error = createProcessingError('UNKNOWN',
-                    '解析AI评分数据文件失败',
-                    parseError instanceof Error ? parseError.message : String(parseError));
-                return { success: false, error };
+            // 解析目标文件夹路径
+            const targetFolders = targetFoldersOption.split(',').map(s => s.trim()).filter(Boolean);
+            const shouldProcessAll = targetFoldersOption.trim() === '/' || targetFolders.length === 0;
+            const targetFolderPaths = targetFolders.map(f => normalizePath(f));
+            
+            // 验证文件夹路径
+            for (const folderPath of targetFolderPaths) {
+                const folder = this.app.vault.getAbstractFileByPath(folderPath);
+                if (!folder) {
+                    return { 
+                        success: false, 
+                        error: createProcessingError('UNKNOWN', `文件夹路径不存在: ${folderPath}`) 
+                    };
+                }
             }
-
+            
+            // 获取所有 Markdown 文件
+            let allMarkdownFiles = this.app.vault.getMarkdownFiles();
+            
+            // 根据保存的嵌入和AI评分导入建议链接
             log('info', "开始从JSON文件读取AI评分数据并插入建议链接");
-            this.notificationService.showNotice('🔄 正在从AI评分数据插入建议链接...', 3000);
             
-            const allMarkdownFiles = this.app.vault.getMarkdownFiles().filter(FilePathUtils.isMarkdownFile);
-            let processedFileCount = 0;
-            let updatedFileCount = 0;
+            // 读取JSON文件
+            const vaultBasePath = (this.app.vault.adapter as any).basePath;
+            const aiScoresJsonPath = `${vaultBasePath}/.jina-linker/ai_scores.json`;
 
-            const targetFolderPaths = targetFoldersOption.split(',').map(p => p.trim()).filter(p => p);
-            const shouldProcessAll = targetFolderPaths.length === 0 || (targetFolderPaths.length === 1 && targetFolderPaths[0] === '/');
-            log('info', `将为 ${allMarkdownFiles.length} 个 Markdown 文件执行链接插入`, {
-                targetFolders: targetFolderPaths.length > 0 ? targetFoldersOption : '仓库根目录'
-            });
-
-            // 初始化进度通知
-            this.notificationService.startProgress('链接插入处理', allMarkdownFiles.length);
-
-            // 性能优化：批量处理文件
-            const batchSize = 5;
-            for (let i = 0; i < allMarkdownFiles.length; i += batchSize) {
-                const batch = allMarkdownFiles.slice(i, i + batchSize);
-                const batchResults = await Promise.allSettled(
-                    batch.map((file: TFile) => this.processFileForLinkInsertionFromJSON(file, targetFolderPaths, shouldProcessAll, aiScoresData))
-                );
+            try {
+                const aiScoresData = JSON.parse(await window.require('fs').promises.readFile(aiScoresJsonPath, 'utf-8'));
                 
-                for (const result of batchResults) {
-                    if (result.status === 'fulfilled' && result.value) {
-                        processedFileCount++;
-                        if (result.value.updated) {
-                            updatedFileCount++;
-                        }
+                log('info', `将为 ${allMarkdownFiles.length} 个 Markdown 文件执行链接插入`, {
+                    targetFolders: targetFolderPaths,
+                    shouldProcessAll,
+                    aiScoresDataLength: Object.keys(aiScoresData?.ai_scores_by_source || {}).length
+                });
+                
+                let processedCount = 0;
+                let updatedCount = 0;
+                
+                for (const file of allMarkdownFiles) {
+                    const result = await this.processFileForLinkInsertionFromJSON(
+                        file, 
+                        targetFolderPaths, 
+                        shouldProcessAll, 
+                        aiScoresData
+                    );
+                    
+                    if (result) {
+                        if (result.processed) processedCount++;
+                        if (result.updated) updatedCount++;
                     }
                 }
                 
-                // 更新进度
-                const currentProcessed = Math.min(i + batchSize, allMarkdownFiles.length);
-                this.notificationService.updateProgress(
-                    currentProcessed, 
-                    `已更新 ${updatedFileCount} 个文件`
-                );
-            }
-            
-            const summaryMessage = `链接插入处理完毕。共检查 ${processedFileCount} 个文件，更新了 ${updatedFileCount} 个文件。`;
-            log('info', summaryMessage);
-            
-            // 完成进度通知
-            this.notificationService.completeProgress(summaryMessage);
-            
-            return {
-                success: true,
-                data: { processedFiles: processedFileCount, updatedFiles: updatedFileCount }
-            };
-            
-        } catch (error: any) {
-            const processingError = createProcessingError('UNKNOWN',
-                '插入建议链接时发生错误',
-                error instanceof Error ? error.message : String(error));
+                const summaryMessage = `链接插入完成: 处理了 ${processedCount} 个文件，更新了 ${updatedCount} 个文件`;
+                log('info', summaryMessage);
                 
-            this.notificationService.showError(processingError.message);
-            return { success: false, error: processingError };
+                this.notificationService.showNotice(`✅ ${summaryMessage}`);
+                
+                return { 
+                    success: true, 
+                    data: { 
+                        processedFiles: processedCount, 
+                        updatedFiles: updatedCount 
+                    } 
+                };
+                
+            } catch (error) {
+                console.error('读取或解析 AI 评分 JSON 文件时出错:', error);
+                return { 
+                    success: false, 
+                    error: createProcessingError('UNKNOWN', 'AI评分数据读取失败', String(error)) 
+                };
+            }
+        } catch (error) {
+            console.error('插入AI链接时出错:', error);
+            return { 
+                success: false, 
+                error: createProcessingError('UNKNOWN', '未知错误', String(error)) 
+            };
         }
     }
 
-    // 从JSON文件读取AI评分数据的文件处理逻辑
     private async processFileForLinkInsertionFromJSON(
         file: TFile,
         targetFolderPaths: string[],
@@ -150,11 +166,9 @@ export class LinkManager {
         try {
             // 检查文件是否在目标文件夹中
             let inTargetFolder = shouldProcessAll;
-            if (!shouldProcessAll) {
-                for (const targetFolder of targetFolderPaths) {
-                    const normalizedTarget = targetFolder.endsWith('/') ? targetFolder.slice(0, -1) : targetFolder;
-                    const filePathNormalized = file.path;
-                    if (filePathNormalized.startsWith(normalizedTarget + '/') || filePathNormalized === normalizedTarget) {
+            if (!inTargetFolder) {
+                for (const folderPath of targetFolderPaths) {
+                    if (file.path === folderPath || file.path.startsWith(folderPath + '/')) {
                         inTargetFolder = true;
                         break;
                     }
@@ -208,7 +222,7 @@ export class LinkManager {
                     lines.splice(lastNonEmptyLineIndex + 1, 0, boundaryMarker);
                     bodyContent = lines.join('\n');
                     boundaryIndexInBody = bodyContent.indexOf(boundaryMarker);
-                    log('info', `在 ${file.path} 添加了哈希边界标记`);
+                    // 删除日志输出
                 } else {
                     log('warn', `${file.path} 没有任何非空行，跳过`);
                     return { processed: false, updated: false };
@@ -229,7 +243,7 @@ export class LinkManager {
 
             if (finalContent !== originalFileContentForComparison) {
                 await this.app.vault.modify(file, finalContent);
-                log('info', `更新了 ${file.path} 的建议链接`);
+                // 删除日志输出
                 return { processed: true, updated: true };
             }
 
