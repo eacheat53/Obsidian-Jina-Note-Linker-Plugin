@@ -1,4 +1,4 @@
-import { App, Notice, Plugin, TFile, Menu, normalizePath, parseYaml, stringifyYaml } from 'obsidian';
+import { App, Notice, Plugin, TFile, Menu, normalizePath } from 'obsidian';
 import { JinaLinkerSettings, DEFAULT_SETTINGS } from './models/settings';
 import { PerformanceMonitor } from './utils/performance-monitor';
 import { CacheManager } from './utils/cache-manager';
@@ -7,6 +7,7 @@ import { HashManager } from './services/hash-manager';
 import { LinkManager } from './services/link-manager';
 import { FileProcessor } from './services/file-processor';
 import { TagManager } from './services/tag-manager';
+import { UuidManager } from './services/uuid-manager';
 import { JinaLinkerSettingTab } from './ui/settings-tab';
 import { RunPluginModal } from './ui/modals/run-plugin-modal';
 import { ProgressModal } from './ui/modals/progress-modal';
@@ -16,8 +17,6 @@ import { log } from './utils/error-handler';
 import { DEFAULT_AI_MODELS } from './models/constants';
 import { AIProvider, RunOptions } from './models/interfaces';
 import { NotificationService } from './utils/notification-service';
-// 导入crypto用于生成UUID
-import * as crypto from 'crypto';
 
 export default class JinaLinkerPlugin extends Plugin {
     settings: JinaLinkerSettings;
@@ -28,6 +27,7 @@ export default class JinaLinkerPlugin extends Plugin {
     private linkManager: LinkManager;
     private tagManager: TagManager;
     private fileProcessor: FileProcessor;
+    private uuidManager: UuidManager;
     private notificationService: NotificationService;
 
     async onload() {
@@ -42,7 +42,8 @@ export default class JinaLinkerPlugin extends Plugin {
         this.hashManager = new HashManager(this.app, this.cacheManager);
         this.linkManager = new LinkManager(this.app, this.settings, this.cacheManager);
         this.tagManager = new TagManager(this.app, this.settings, this.cacheManager);
-        this.fileProcessor = new FileProcessor(this.app, this.cacheManager);
+        this.fileProcessor = new FileProcessor(this.app, this.cacheManager, this.settings);
+        this.uuidManager = new UuidManager(this.app, this.settings);
 
         // 初始化通知服务
         this.notificationService = NotificationService.getInstance();
@@ -57,7 +58,7 @@ export default class JinaLinkerPlugin extends Plugin {
                 if (file instanceof TFile && file.extension === 'md') {
                     // 延迟一小段时间再处理，确保文件内容已完全写入
                     setTimeout(async () => {
-                        await this.ensureUniqueNoteId(file);
+                        await this.uuidManager.ensureUniqueNoteId(file);
                     }, 500);
                 }
             })
@@ -129,7 +130,7 @@ export default class JinaLinkerPlugin extends Plugin {
                 const activeFile = this.app.workspace.getActiveFile();
                 if (activeFile && activeFile.extension === 'md') {
                     if (!checking) {
-                        this.ensureUniqueNoteId(activeFile)
+                        this.uuidManager.ensureUniqueNoteId(activeFile)
                             .then(() => {
                                 this.notificationService.showNotice('✅ 已为当前笔记添加/更新唯一ID');
                             })
@@ -141,6 +142,77 @@ export default class JinaLinkerPlugin extends Plugin {
                     return true;
                 }
                 return false;
+            }
+        });
+
+        // ---- 新增：UUID 验证和统计命令 ----
+        this.addCommand({
+            id: 'uuid-validation-and-statistics',
+            name: 'UUID 格式验证和库统计分析',
+            callback: async () => {
+                console.log('🔍 用户启动：UUID验证和统计分析功能');
+                try {
+                    const stats = await this.uuidManager.getUuidStatistics();
+                    
+                    const report = [
+                        '📊 UUID 统计报告',
+                        '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+                        `📁 总文件数: ${stats.totalFiles}`,
+                        `✅ 包含UUID的文件: ${stats.filesWithUuid}`,
+                        `❌ 缺少UUID的文件: ${stats.filesWithoutUuid}`,
+                        `🚫 被排除的文件: ${stats.excludedFiles}`,
+                        `🔄 重复UUID数量: ${stats.duplicateUuids}`,
+                        `⚠️ 无效UUID格式: ${stats.invalidUuids}`,
+                        '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+                        `📈 UUID覆盖率: ${((stats.filesWithUuid / (stats.totalFiles - stats.excludedFiles)) * 100).toFixed(1)}%`
+                    ].join('\n');
+                    
+                    console.log(report);
+                    
+                    // 显示统计信息
+                    new Notice(`UUID统计：${stats.filesWithUuid}/${stats.totalFiles - stats.excludedFiles} 文件有UUID`, 8000);
+                    
+                    if (stats.invalidUuids > 0) {
+                        new Notice(`⚠️ 发现 ${stats.invalidUuids} 个无效UUID格式`, 5000);
+                    }
+                    
+                    if (stats.duplicateUuids > 0) {
+                        new Notice(`🔄 发现 ${stats.duplicateUuids} 个重复UUID`, 5000);
+                    }
+                    
+                } catch (error) {
+                    log('error', 'UUID统计分析失败', error);
+                    this.notificationService.showError('❌ UUID统计分析失败');
+                }
+            }
+        });
+
+        // ---- 新增：批量UUID验证和修复命令 ----
+        this.addCommand({
+            id: 'batch-uuid-validation-repair',
+            name: '批量UUID验证和模板ID修复',
+            callback: async () => {
+                console.log('🔧 用户启动：批量UUID验证和修复功能');
+                try {
+                    const allFiles = this.app.vault.getMarkdownFiles();
+                    const result = await this.uuidManager.ensureUniqueIdsForFiles(allFiles);
+                    
+                    const summary = [
+                        '🔧 UUID验证和修复完成',
+                        '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+                        `📝 处理文件数: ${result.processed}`,
+                        `✨ 更新文件数: ${result.updated}`,
+                        `🚫 跳过文件数: ${result.skipped}`,
+                        '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'
+                    ].join('\n');
+                    
+                    console.log(summary);
+                    new Notice(`批量UUID处理完成：更新了 ${result.updated} 个文件`, 5000);
+                    
+                } catch (error) {
+                    log('error', '批量UUID处理失败', error);
+                    this.notificationService.showError('❌ 批量UUID处理失败');
+                }
             }
         });
 
@@ -194,6 +266,54 @@ export default class JinaLinkerPlugin extends Plugin {
                         new AddAiTagsModal(this.app, this, (paths: string, mode: 'smart'|'force') => {
                             this.runTagOnlyFlow(paths, mode);
                         }).open();
+                   });
+            });
+
+            menu.addItem((item: any) => {
+                item.setTitle("为当前笔记生成唯一ID")
+                   .setIcon("hash")
+                   .onClick(() => {
+                        const activeFile = this.app.workspace.getActiveFile();
+                        if (activeFile && activeFile.extension === 'md') {
+                            this.uuidManager.ensureUniqueNoteId(activeFile)
+                                .then(() => {
+                                    this.notificationService.showNotice('✅ 已为当前笔记添加/更新唯一ID');
+                                })
+                                .catch(err => {
+                                    this.notificationService.showError('❌ 添加/更新ID失败');
+                                    log('error', '手动添加note_id失败', err);
+                                });
+                        } else {
+                            this.notificationService.showError('请选择一个 Markdown 文件');
+                        }
+                   });
+            });
+
+            menu.addItem((item: any) => {
+                item.setTitle("UUID格式验证和统计")
+                   .setIcon("bar-chart")
+                   .onClick(async () => {
+                        try {
+                            const stats = await this.uuidManager.getUuidStatistics();
+                            const report = `UUID统计：${stats.filesWithUuid}/${stats.totalFiles - stats.excludedFiles} 文件有UUID\n无效格式: ${stats.invalidUuids}, 重复: ${stats.duplicateUuids}`;
+                            new Notice(report, 8000);
+                        } catch (error) {
+                            this.notificationService.showError('❌ UUID统计分析失败');
+                        }
+                   });
+            });
+
+            menu.addItem((item: any) => {
+                item.setTitle("批量UUID修复")
+                   .setIcon("wrench")
+                   .onClick(async () => {
+                        try {
+                            const allFiles = this.app.vault.getMarkdownFiles();
+                            const result = await this.uuidManager.ensureUniqueIdsForFiles(allFiles);
+                            new Notice(`批量UUID处理完成：更新了 ${result.updated} 个文件`, 5000);
+                        } catch (error) {
+                            this.notificationService.showError('❌ 批量UUID处理失败');
+                        }
                    });
             });
             
@@ -364,95 +484,5 @@ export default class JinaLinkerPlugin extends Plugin {
     clearCache(): void {
         this.cacheManager.clearCache();
         this.notificationService.showNotice('🧹 缓存已清理', 2000);
-    }
-
-    // 确保笔记有一个唯一的note_id
-    private async ensureUniqueNoteId(file: TFile): Promise<void> {
-        try {
-            // 读取文件内容
-            const content = await this.app.vault.read(file);
-            
-            // 解析frontmatter - 更精确的regex匹配
-            const fmRegex = /^---\s*?\n([\s\S]*?)\n---\s*?\n/;
-            const fmMatch = content.match(fmRegex);
-            
-            if (!fmMatch) {
-                // 没有frontmatter，添加一个带note_id的frontmatter
-                const noteId = this.generateUniqueId();
-                const newContent = `---\nnote_id: ${noteId}\n---\n\n${content}`;
-                await this.app.vault.modify(file, newContent);
-                log('info', `为新文件 ${file.path} 添加了frontmatter和note_id: ${noteId}`);
-                return;
-            }
-            
-            // 提取frontmatter部分和其他内容
-            const fullFmMatch = fmMatch[0];  // 包括分隔符的完整frontmatter
-            const fmContent = fmMatch[1];    // 仅frontmatter内容(不含---)
-            const contentAfterFm = content.slice(fullFmMatch.length);
-            
-            try {
-                // 使用Obsidian的parseYaml解析frontmatter
-                const fmData = parseYaml(fmContent) || {};
-                
-                // 检查是否已有note_id
-                if (!fmData.note_id) {
-                    // 添加note_id
-                    fmData.note_id = this.generateUniqueId();
-                    
-                    // 使用stringifyYaml生成新的frontmatter
-                    const newFmContent = stringifyYaml(fmData);
-                    const newContent = `---\n${newFmContent}---\n${contentAfterFm}`;
-                    
-                    await this.app.vault.modify(file, newContent);
-                    log('info', `为新文件 ${file.path} 添加了note_id: ${fmData.note_id}`);
-                } else if (typeof fmData.note_id === 'string' && this.isTemplateId(fmData.note_id)) {
-                    // 如果现有ID是模板生成的(例如有特定前缀或格式特征)，则替换它
-                    const oldId = fmData.note_id;
-                    fmData.note_id = this.generateUniqueId();
-                    
-                    // 使用stringifyYaml生成新的frontmatter
-                    const newFmContent = stringifyYaml(fmData);
-                    const newContent = `---\n${newFmContent}---\n${contentAfterFm}`;
-                    
-                    await this.app.vault.modify(file, newContent);
-                    log('info', `为文件 ${file.path} 替换了模板ID ${oldId} 为新ID: ${fmData.note_id}`);
-                }
-                
-            } catch (yamlError) {
-                // YAML解析错误处理
-                log('error', `解析文件 ${file.path} 的frontmatter时出错`, yamlError);
-                
-                // 尝试使用简单的方式处理
-                if (!fmContent.includes('note_id:')) {
-                    const noteId = this.generateUniqueId();
-                    const newFmContent = fmContent.trim() + `\nnote_id: ${noteId}`;
-                    const newContent = content.replace(fmContent, newFmContent);
-                    await this.app.vault.modify(file, newContent);
-                    log('info', `使用简单处理为文件 ${file.path} 添加了note_id: ${noteId}`);
-                }
-            }
-        } catch (error) {
-            log('error', `处理文件 ${file.path} 的note_id时出错`, error);
-            this.notificationService.showError(`为文件 ${file.path} 添加ID时出错`);
-        }
-    }
-    
-    // 检查ID是否为模板生成的ID
-    private isTemplateId(id: string): boolean {
-        // 以下条件可根据实际情况调整
-        return id.includes('template') || 
-               id === '00000000-0000-0000-0000-000000000000' ||
-               id.match(/^[a-f0-9]{8}-?[a-f0-9]{4}-?[a-f0-9]{4}-?[a-f0-9]{4}-?[a-f0-9]{12}$/) === null;
-    }
-    
-    // 生成唯一ID
-    private generateUniqueId(): string {
-        try {
-            return crypto.randomUUID();
-        } catch (e) {
-            // 备用方案，生成一个简化的UUID格式
-            const random = () => Math.floor(Math.random() * 1e10).toString(16);
-            return `${random()}-${random()}-${random()}-${random()}`;
-        }
     }
 }

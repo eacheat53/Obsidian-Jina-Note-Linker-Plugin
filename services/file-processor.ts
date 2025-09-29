@@ -1,12 +1,83 @@
 import { Notice, TFile, TFolder, normalizePath } from 'obsidian';
 import { HASH_BOUNDARY_MARKER } from '../models/constants';
 import { OperationResult } from '../models/interfaces';
+import { JinaLinkerSettings } from '../models/settings';
 import { log } from '../utils/error-handler';
 import { CacheManager } from '../utils/cache-manager';
 // HashManager 仅在旧的哈希更新功能中使用，已移除
 
 export class FileProcessor {
-    constructor(private app: any, private cacheManager: CacheManager) {}
+    constructor(private app: any, private cacheManager: CacheManager, private settings?: JinaLinkerSettings) {}
+
+    /**
+     * Checks if a file should be excluded from processing based on configuration
+     * @param filePath The path of the file to check
+     * @returns boolean indicating if file should be excluded
+     */
+    shouldExcludeFile(filePath: string): boolean {
+        if (!this.settings) return false;
+        
+        // Check excluded folders
+        const excludedFolders = this.settings.excludedFolders
+            .split(',')
+            .map(folder => folder.trim())
+            .filter(folder => folder.length > 0);
+
+        for (const folder of excludedFolders) {
+            if (filePath.startsWith(folder + '/') || filePath === folder || filePath.includes('/' + folder + '/')) {
+                return true;
+            }
+        }
+
+        // Check excluded file patterns
+        const excludedPatterns = this.settings.excludedFilesPatterns
+            .split(',')
+            .map(pattern => pattern.trim())
+            .filter(pattern => pattern.length > 0);
+
+        const fileName = filePath.split('/').pop() || '';
+        const fileNameWithoutExt = fileName.replace(/\.[^/.]+$/, '');
+
+        for (const pattern of excludedPatterns) {
+            if (this.matchesPattern(fileName, pattern) || this.matchesPattern(fileNameWithoutExt, pattern)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Pattern matching helper for file exclusion
+     * @param text Text to match against
+     * @param pattern Pattern to match (supports wildcards)
+     * @returns boolean indicating if pattern matches
+     */
+    private matchesPattern(text: string, pattern: string): boolean {
+        // Handle exact match
+        if (pattern === text) {
+            return true;
+        }
+
+        // Handle ^ prefix (exact start match)
+        if (pattern.startsWith('^') && pattern.endsWith('$')) {
+            const exactPattern = pattern.slice(1, -1);
+            return text === exactPattern;
+        }
+
+        // Handle * wildcards
+        if (pattern.includes('*')) {
+            const regexPattern = pattern
+                .replace(/[.+?^${}()|[\]\\]/g, '\\$&') // Escape regex special chars
+                .replace(/\*/g, '.*'); // Replace * with .*
+            
+            const regex = new RegExp(`^${regexPattern}$`, 'i');
+            return regex.test(text);
+        }
+
+        // Handle partial match
+        return text.toLowerCase().includes(pattern.toLowerCase());
+    }
 
     // 递归获取文件夹中的所有Markdown文件
     getMarkdownFilesInFolder(folder: TFolder): TFile[] {
@@ -38,9 +109,16 @@ export class FileProcessor {
         }
         files = Array.from(new Set(files));
 
-        let processed = 0, updated = 0;
+        let processed = 0, updated = 0, skipped = 0;
         for (const file of files) {
             processed++;
+            
+            // Check if file should be excluded
+            if (this.shouldExcludeFile(file.path)) {
+                skipped++;
+                continue;
+            }
+            
             try {
                 const content = await this.cacheManager.getCachedFileContent(file, this.app.vault);
                 
@@ -101,7 +179,11 @@ export class FileProcessor {
                 const fm = fmMatch[0];
                 const bodyStart = content.indexOf(fm) + fm.length;
                 const body = content.substring(bodyStart).trim();
-                updatedContent = `${fm}\n\n${body}\n\n${HASH_BOUNDARY_MARKER}`;
+                updatedContent = `${fm}
+
+${body}
+
+${HASH_BOUNDARY_MARKER}`;
             } else {
                 // 没有 Front Matter，直接在文件末尾添加边界标记
                 updatedContent = `${content.trim()}\n\n${HASH_BOUNDARY_MARKER}`;

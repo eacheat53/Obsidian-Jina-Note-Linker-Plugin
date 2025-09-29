@@ -7,6 +7,61 @@ import { HASH_BOUNDARY_MARKER } from '../models/constants';
 export class TagManager {
     constructor(private app: App, private settings: JinaLinkerSettings, private cacheManager: CacheManager) {}
 
+    /**
+     * Checks if a file should be excluded from tag processing based on configuration
+     * @param filePath The path of the file to check
+     * @returns boolean indicating if file should be excluded
+     */
+    shouldExcludeFile(filePath: string): boolean {
+        // Check excluded folders
+        const excludedFolders = this.settings.excludedFolders
+            .split(',')
+            .map(folder => folder.trim())
+            .filter(folder => folder.length > 0);
+
+        for (const folder of excludedFolders) {
+            if (filePath.startsWith(folder + '/') || filePath === folder || filePath.includes('/' + folder + '/')) {
+                return true;
+            }
+        }
+
+        // Check excluded file patterns
+        const excludedPatterns = this.settings.excludedFilesPatterns
+            .split(',')
+            .map(pattern => pattern.trim())
+            .filter(pattern => pattern.length > 0);
+
+        const fileName = filePath.split('/').pop() || '';
+        const fileNameWithoutExt = fileName.replace(/\.[^/.]+$/, '');
+
+        for (const pattern of excludedPatterns) {
+            if (this.matchesPattern(fileName, pattern) || this.matchesPattern(fileNameWithoutExt, pattern)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Pattern matching helper for file exclusion
+     */
+    private matchesPattern(text: string, pattern: string): boolean {
+        if (pattern === text) return true;
+        if (pattern.startsWith('^') && pattern.endsWith('$')) {
+            const exactPattern = pattern.slice(1, -1);
+            return text === exactPattern;
+        }
+        if (pattern.includes('*')) {
+            const regexPattern = pattern
+                .replace(/[.+?^${}()|[\]\\]/g, '\\$&')
+                .replace(/\*/g, '.*');
+            const regex = new RegExp(`^${regexPattern}$`, 'i');
+            return regex.test(text);
+        }
+        return text.toLowerCase().includes(pattern.toLowerCase());
+    }
+
     async insertAIGeneratedTagsIntoNotes(targetFoldersOption: string): Promise<{processed:number, updated:number}> {
         const vaultBase = (this.app.vault.adapter as any).basePath || '';
         const jsonPath = `${vaultBase}/.jina-linker/ai_tags.json`;
@@ -21,8 +76,14 @@ export class TagManager {
         const targetFolders = targetFoldersOption.split(',').map(s=>s.trim()).filter(Boolean);
         const shouldProcessAll = targetFoldersOption.trim()==='/' || targetFolders.length===0;
 
-        let processed = 0, updated = 0;
+        let processed = 0, updated = 0, skipped = 0;
         for(const filePath of Object.keys(tagMap)){
+            // Check if file should be excluded
+            if (this.shouldExcludeFile(filePath)) {
+                skipped++;
+                continue;
+            }
+            
             if(!shouldProcessAll){
                 const inFolder = targetFolders.some(f=> filePath.startsWith(f.endsWith('/')?f:f+'/') || filePath===f);
                 if(!inFolder) continue;
